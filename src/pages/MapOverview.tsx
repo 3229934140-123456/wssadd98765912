@@ -1,66 +1,69 @@
-import React, { useState, useEffect } from 'react';
-import { Truck, Thermometer, AlertTriangle, CheckCircle, Route, Filter, RotateCcw, User, Phone, ChevronRight, X, Building2, ChevronDown, Maximize2, MapPin, Clock } from 'lucide-react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { Truck, Thermometer, AlertTriangle, CheckCircle, Route, Filter, RotateCcw, User, Phone, ChevronRight, X, Maximize2, MapPin, Clock, Crosshair, MessageSquare, Shield } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import StatsCard from '@/components/StatsCard';
 import MapView from '@/components/MapView';
 import TempChart from '@/components/TempChart';
 import { Timeline, TimelineItem } from '@/components/Timeline';
+import JurisdictionSelector from '@/components/JurisdictionSelector';
+import RiskBadge from '@/components/RiskBadge';
 import { useVehicleStore } from '@/store/vehicleStore';
 import { useBatchStore } from '@/store/batchStore';
 import { useExceptionStore } from '@/store/exceptionStore';
-import { routes, carriers, vaccineTypes, districts } from '@/mock/vehicles';
-import { formatTemperature, getEventTypeText, getVehicleStatusText, getExceptionTypeText, formatRelativeTime } from '@/utils/format';
-import type { CountyDistrict, JurisdictionLevel } from '@/types';
+import { useJurisdictionStore } from '@/store/jurisdictionStore';
+import { routes, carriers, vaccineTypes } from '@/mock/vehicles';
+import { formatTemperature, getEventTypeText, getVehicleStatusText, getExceptionTypeText, formatRelativeTime, getExceptionStatusText, formatDateTime, getRelevantPointIdsForException } from '@/utils/format';
+import type { TrackPoint, ExceptionEvent } from '@/types';
 
 const MapOverview: React.FC = () => {
   const navigate = useNavigate();
   const {
     filters,
     selectedVehicleId,
-    jurisdiction,
-    countyDistrict,
     highlightTrackSegment,
+    activeExceptionId,
     setFilters,
     resetFilters,
     setSelectedVehicle,
-    setJurisdiction,
-    setCountyDistrict,
     setHighlightTrackSegment,
+    setActiveExceptionId,
     getFilteredVehicles,
     getTrackPointsByVehicleId,
     getVehicleStats,
   } = useVehicleStore();
 
   const { getBatchesByVehicleId } = useBatchStore();
-  const { exceptions } = useExceptionStore();
+  const { exceptions, locateVehicleId, setLocateVehicleId } = useExceptionStore();
 
   const [showDetailModal, setShowDetailModal] = useState(false);
+  const { level: jurisdictionLevel, county: countyDistrict } = useJurisdictionStore();
 
   const stats = getVehicleStats();
   const filteredVehicles = getFilteredVehicles();
   const selectedVehicle = filteredVehicles.find((v) => v.id === selectedVehicleId);
   const trackPoints = selectedVehicle ? getTrackPointsByVehicleId(selectedVehicleId!) : [];
   const relatedBatches = selectedVehicle ? getBatchesByVehicleId(selectedVehicle.id, selectedVehicle.batchNumbers) : [];
+  const activeException = activeExceptionId ? exceptions.find((e) => e.id === activeExceptionId) : null;
 
-  const highlightPointIds = React.useMemo(() => {
+  const filteredTrackPoints = useMemo(() => {
+    if (!activeException) return trackPoints;
+    return trackPoints;
+  }, [trackPoints, activeException]);
+
+  const highlightPointIds = useMemo(() => {
     if (highlightTrackSegment && highlightTrackSegment.vehicleId === selectedVehicleId) {
       return highlightTrackSegment.pointIds;
     }
+    if (activeException && selectedVehicle && activeException.vehicleId === selectedVehicleId) {
+      return getRelevantPointIdsForException(activeException, trackPoints);
+    }
     return [];
-  }, [highlightTrackSegment, selectedVehicleId]);
+  }, [highlightTrackSegment, selectedVehicleId, activeException, trackPoints]);
 
-  const timelineItems: TimelineItem[] = trackPoints.map((tp) => ({
-    type: tp.eventType,
-    title: getEventTypeText(tp.eventType),
-    time: tp.timestamp,
-    description: tp.eventDesc,
-    temp: tp.temp,
-  }));
-
-  const tempRecords = trackPoints.map((tp) => ({
-    timestamp: tp.timestamp,
-    temp: tp.temp,
-  }));
+  const mapEventPoints = useMemo(() => {
+    if (!activeException) return trackPoints;
+    return trackPoints.filter((p) => highlightPointIds.includes(p.id));
+  }, [trackPoints, activeException, highlightPointIds]);
 
   const vehicleExceptions = selectedVehicle
     ? exceptions.filter((e) => e.vehicleId === selectedVehicle.id)
@@ -73,60 +76,42 @@ const MapOverview: React.FC = () => {
       const vehicle = useVehicleStore.getState().vehicles.find((v) => v.id === locateVehicleId);
       if (vehicle) {
         const tps = useVehicleStore.getState().trackPoints[locateVehicleId] || [];
-        const eventPointIds = tps.filter((tp) => tp.eventType !== 'normal').map((tp) => tp.id);
-        if (eventPointIds.length > 0) {
-          setHighlightTrackSegment({ vehicleId: locateVehicleId, pointIds: eventPointIds });
+        const recentEx = exceptions
+          .filter((e) => e.vehicleId === locateVehicleId)
+          .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())[0];
+        if (recentEx) {
+          setActiveExceptionId(recentEx.id);
+          const relevantIds = getRelevantPointIdsForException(recentEx, tps);
+          setHighlightTrackSegment({ vehicleId: locateVehicleId, pointIds: relevantIds });
         }
       }
       setLocateVehicleId(null);
     }
   }, []);
 
-  const jurisdictionLabel = jurisdiction === 'city' ? '市级' : `县级·${countyDistrict || '未选择'}`;
+  const jurisdictionLabel = jurisdictionLevel === 'city' ? '市级' : `县级·${countyDistrict || '未选择'}`;
+
+  const timelineItems: TimelineItem[] = filteredTrackPoints.map((tp) => ({
+    type: tp.eventType,
+    title: getEventTypeText(tp.eventType),
+    time: tp.timestamp,
+    description: tp.eventDesc,
+    temp: tp.temp,
+  }));
+
+  const tempRecords = trackPoints.map((tp) => ({
+    timestamp: tp.timestamp,
+    temp: tp.temp,
+  }));
+
+  const handleClearActiveException = () => {
+    setActiveExceptionId(null);
+    setHighlightTrackSegment(null);
+  };
 
   return (
     <div className="h-full flex flex-col gap-4 -m-6 p-6">
-      <div className="flex items-center gap-3 mb-1">
-        <div className="flex items-center gap-1 bg-dashboard-card border border-dashboard-border rounded-lg overflow-hidden">
-          <button
-            className={`px-3 py-1.5 text-xs font-medium transition-colors ${
-              jurisdiction === 'city'
-                ? 'bg-primary-600 text-white'
-                : 'text-slate-400 hover:text-white hover:bg-dashboard-hover'
-            }`}
-            onClick={() => setJurisdiction('city')}
-          >
-            🏛️ 市级
-          </button>
-          <button
-            className={`px-3 py-1.5 text-xs font-medium transition-colors ${
-              jurisdiction === 'county'
-                ? 'bg-primary-600 text-white'
-                : 'text-slate-400 hover:text-white hover:bg-dashboard-hover'
-            }`}
-            onClick={() => setJurisdiction('county')}
-          >
-            🏘️ 县级
-          </button>
-        </div>
-        {jurisdiction === 'county' && (
-          <select
-            className="select-field text-xs min-w-[120px] py-1.5"
-            value={countyDistrict}
-            onChange={(e) => setCountyDistrict(e.target.value as CountyDistrict | '')}
-          >
-            <option value="">选择辖区</option>
-            {districts.filter((d) => d.value).map((d) => (
-              <option key={d.value} value={d.value}>{d.label}</option>
-            ))}
-          </select>
-        )}
-        <div className="text-xs text-slate-500 ml-1">
-          当前视图: <span className="text-primary-400">{jurisdictionLabel}</span>
-          <span className="mx-1">·</span>
-          <span>{filteredVehicles.length} 辆在途</span>
-        </div>
-      </div>
+      <JurisdictionSelector />
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
         <StatsCard
@@ -202,18 +187,102 @@ const MapOverview: React.FC = () => {
           <MapView
             vehicles={filteredVehicles}
             selectedVehicleId={selectedVehicleId}
-            trackPoints={trackPoints}
+            trackPoints={activeException ? mapEventPoints : trackPoints}
             highlightPointIds={highlightPointIds}
             onVehicleClick={(id) => {
               setSelectedVehicle(id === selectedVehicleId ? null : id);
               setHighlightTrackSegment(null);
+              setActiveExceptionId(null);
             }}
           />
         </div>
 
         <div className="w-80 flex flex-col gap-3 overflow-hidden">
+          {activeException && selectedVehicle && (
+            <div className="dashboard-card border-red-500/40 animate-slide-up flex flex-col overflow-hidden flex-shrink-0">
+              <div className="p-3 border-b border-dashboard-border flex-shrink-0 bg-red-500/5">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <Shield className="w-4 h-4 text-red-400" />
+                    <span className="text-sm font-semibold text-white">异常复盘 · {getExceptionTypeText(activeException.type)}</span>
+                  </div>
+                  <RiskBadge level={activeException.level} />
+                </div>
+                <div className="text-xs text-amber-300 mb-2 flex items-center gap-1.5">
+                  <Crosshair className="w-3 h-3" />
+                  地图仅显示本次异常相关路段
+                </div>
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div className="flex items-center gap-1.5 text-slate-400">
+                    <MapPin className="w-3.5 h-3.5" />
+                    <span className="text-slate-300">{activeException.location || '未知位置'}</span>
+                  </div>
+                  <div className="flex items-center gap-1.5 text-slate-400">
+                    <Clock className="w-3.5 h-3.5" />
+                    <span className="text-slate-300">{formatDateTime(activeException.timestamp)}</span>
+                  </div>
+                  <div className="flex items-center gap-1.5 text-slate-400">
+                    <Thermometer className="w-3.5 h-3.5" />
+                    <span className={`data-number font-medium ${
+                      activeException.temperature && activeException.temperature > 8 ? 'text-red-400' : 'text-emerald-400'
+                    }`}>
+                      {activeException.temperature !== undefined ? formatTemperature(activeException.temperature) : '-'}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1.5 text-slate-400">
+                    <AlertTriangle className="w-3.5 h-3.5" />
+                    <span className={
+                      activeException.status === 'pending' ? 'text-red-400' :
+                      activeException.status === 'handling' ? 'text-amber-400' :
+                      'text-emerald-400'
+                    }>
+                      {getExceptionStatusText(activeException.status)}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="p-3 border-b border-dashboard-border">
+                <p className="text-xs text-slate-300 mb-2">{activeException.description}</p>
+                {activeException.handleOpinion ? (
+                  <div className="bg-dashboard-surface rounded p-2">
+                    <div className="text-xs text-slate-500 flex items-center gap-1 mb-1">
+                      <MessageSquare className="w-3 h-3" />
+                      最新处置意见 · {activeException.handler} · {formatDateTime(activeException.handleTime!)}
+                    </div>
+                    <div className="text-xs text-primary-300">{activeException.handleOpinion}</div>
+                  </div>
+                ) : (
+                  <button
+                    className="btn-primary w-full text-xs justify-center"
+                    onClick={() => {
+                      useExceptionStore.getState().setSelectedException(activeException.id);
+                      navigate('/exception-handling');
+                    }}
+                  >
+                    <MessageSquare className="w-3.5 h-3.5" />
+                    <span>去下发处置意见</span>
+                  </button>
+                )}
+              </div>
+
+              <div className="p-3 flex-shrink-0 flex items-center justify-between">
+                <div className="text-xs text-slate-500 flex items-center gap-1.5">
+                  <Truck className="w-3.5 h-3.5" />
+                  <span>{selectedVehicle.plateNumber} · {selectedVehicle.driver}</span>
+                </div>
+                <button
+                  className="text-xs text-slate-400 hover:text-white flex items-center gap-1"
+                  onClick={handleClearActiveException}
+                >
+                  退出复盘模式 <X className="w-3 h-3" />
+                </button>
+              </div>
+            </div>
+          )}
+
           {selectedVehicle && (
-            <div className="dashboard-card border-primary-500/30 animate-slide-up flex flex-col max-h-[60%] overflow-hidden">
+            <div className="dashboard-card border-primary-500/30 animate-slide-up flex flex-col overflow-hidden flex-shrink-0">
               <div className="p-3 border-b border-dashboard-border flex-shrink-0">
                 <div className="flex items-center justify-between mb-2">
                   <div className="flex items-center gap-2">
@@ -227,6 +296,7 @@ const MapOverview: React.FC = () => {
                     onClick={() => {
                       setSelectedVehicle(null);
                       setHighlightTrackSegment(null);
+                      setActiveExceptionId(null);
                     }}
                   >
                     <X className="w-4 h-4" />
@@ -259,8 +329,18 @@ const MapOverview: React.FC = () => {
                       {vehicleExceptions.length} 条关联异常
                     </div>
                     {vehicleExceptions.slice(0, 2).map((ex) => (
-                      <div key={ex.id} className="text-xs text-slate-400 flex items-center gap-1 mb-0.5">
-                        <span className={`w-1.5 h-1.5 rounded-full ${
+                      <div
+                        key={ex.id}
+                        className={`text-xs flex items-center gap-1 mb-0.5 p-1 rounded cursor-pointer transition-colors ${
+                          activeExceptionId === ex.id ? 'bg-primary-500/20 text-white' : 'text-slate-400 hover:bg-dashboard-hover'
+                        }`}
+                        onClick={() => {
+                          setActiveExceptionId(ex.id === activeExceptionId ? null : ex.id);
+                          const relevantIds = getRelevantPointIdsForException(ex, trackPoints);
+                          setHighlightTrackSegment({ vehicleId: selectedVehicle.id, pointIds: relevantIds });
+                        }}
+                      >
+                        <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
                           ex.level === 'high' ? 'bg-red-500' : ex.level === 'medium' ? 'bg-amber-500' : 'bg-blue-500'
                         }`} />
                         <span className="truncate">{getExceptionTypeText(ex.type)} - {formatRelativeTime(ex.timestamp)}</span>
@@ -279,40 +359,53 @@ const MapOverview: React.FC = () => {
               <div className="p-3 flex-1 overflow-auto">
                 <div className="text-xs font-medium text-slate-400 mb-2 flex items-center gap-1.5">
                   <Route className="w-3.5 h-3.5" />
-                  轨迹与事件
+                  {activeException ? '异常相关事件' : '轨迹与事件'}
                 </div>
                 {timelineItems.length > 0 ? (
                   <div className="space-y-1.5">
-                    {timelineItems.map((item, idx) => (
-                      <div
-                        key={idx}
-                        className={`flex items-start gap-2 p-1.5 rounded text-xs ${
-                          item.type !== 'normal' ? 'bg-amber-500/5 border border-amber-500/10' : ''
-                        }`}
-                      >
-                        <span className="flex-shrink-0 mt-0.5">
-                          {item.type === 'loading' ? '📦' :
-                           item.type === 'unloading' ? '📤' :
-                           item.type === 'stop' ? '🛑' :
-                           item.type === 'door-open' ? '🚪' :
-                           item.type === 'door-close' ? '🔒' : '🔵'}
-                        </span>
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-2">
-                            <span className="text-white font-medium">{item.title}</span>
-                            {item.temp !== undefined && (
-                              <span className={`data-number ${
-                                item.temp > 8 || item.temp < 2 ? 'text-red-400' : 'text-slate-400'
-                              }`}>
-                                {formatTemperature(item.temp)}
-                              </span>
-                            )}
+                    {timelineItems
+                      .filter((_, idx) => {
+                        if (!activeException) return true;
+                        return highlightPointIds.includes(trackPoints[idx]?.id || '');
+                      })
+                      .map((item, idx) => {
+                        const tp = activeException
+                          ? trackPoints.find((p) => p.id === highlightPointIds[idx])
+                          : trackPoints[idx];
+                        const isHighlighted = tp && highlightPointIds.includes(tp.id);
+                        return (
+                          <div
+                            key={idx}
+                            className={`flex items-start gap-2 p-1.5 rounded text-xs ${
+                              isHighlighted
+                                ? 'bg-red-500/10 border border-red-500/20'
+                                : item.type !== 'normal' ? 'bg-amber-500/5 border border-amber-500/10' : ''
+                            }`}
+                          >
+                            <span className="flex-shrink-0 mt-0.5">
+                              {item.type === 'loading' ? '📦' :
+                               item.type === 'unloading' ? '📤' :
+                               item.type === 'stop' ? '🛑' :
+                               item.type === 'door-open' ? '🚪' :
+                               item.type === 'door-close' ? '🔒' : '🔵'}
+                            </span>
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2">
+                                <span className="text-white font-medium">{item.title}</span>
+                                {item.temp !== undefined && (
+                                  <span className={`data-number ${
+                                    item.temp > 8 || item.temp < 2 ? 'text-red-400' : 'text-slate-400'
+                                  }`}>
+                                    {formatTemperature(item.temp)}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="text-slate-500 truncate">{item.description}</div>
+                              <div className="text-slate-600 data-number">{item.time.split(' ')[1]}</div>
+                            </div>
                           </div>
-                          <div className="text-slate-500 truncate">{item.description}</div>
-                          <div className="text-slate-600 data-number">{item.time.split(' ')[1]}</div>
-                        </div>
-                      </div>
-                    ))}
+                        );
+                      })}
                   </div>
                 ) : (
                   <div className="text-xs text-slate-500">暂无轨迹数据</div>
@@ -351,6 +444,7 @@ const MapOverview: React.FC = () => {
                     onClick={() => {
                       setSelectedVehicle(v.id);
                       setHighlightTrackSegment(null);
+                      setActiveExceptionId(null);
                     }}
                   >
                     <div className="flex items-center justify-between mb-1">

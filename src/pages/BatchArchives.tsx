@@ -1,18 +1,33 @@
 import React, { useState } from 'react';
-import { FileBarChart, Search, RotateCcw, Package, Building2, Calendar, Thermometer, User, Truck, X, ChevronRight, Warehouse, MapPin, AlertTriangle, Download, Shield, Clock, CheckCircle, AlertCircle } from 'lucide-react';
+import { FileBarChart, Search, RotateCcw, Package, Building2, Calendar, Thermometer, User, Truck, X, ChevronRight, Warehouse, MapPin, AlertTriangle, Download, Shield, Clock, CheckCircle, AlertCircle, FileSpreadsheet, CheckSquare, Square } from 'lucide-react';
 import StatsCard from '@/components/StatsCard';
 import TempChart from '@/components/TempChart';
 import { Timeline, TimelineItem } from '@/components/Timeline';
+import JurisdictionSelector from '@/components/JurisdictionSelector';
 import RiskBadge from '@/components/RiskBadge';
 import { useBatchStore } from '@/store/batchStore';
 import { useExceptionStore } from '@/store/exceptionStore';
 import { useVehicleStore } from '@/store/vehicleStore';
 import { vaccineNames, batchStatusOptions } from '@/mock/batches';
 import { getBatchStatusText, formatTemperature, formatDateTime, getExceptionTypeText, getExceptionStatusText, getVehicleStatusText, formatRelativeTime } from '@/utils/format';
-import type { VaccineBatch } from '@/types';
+import type { VaccineBatch, ExceptionEvent } from '@/types';
 
 const BatchArchives: React.FC = () => {
-  const { filters, setFilters, resetFilters, getFilteredBatches, selectedBatchId, setSelectedBatch, getBatchById } = useBatchStore();
+  const {
+    filters,
+    setFilters,
+    resetFilters,
+    getFilteredBatches,
+    selectedBatchId,
+    setSelectedBatch,
+    monthlyCheckMode,
+    setMonthlyCheckMode,
+    selectedBatchIds,
+    setSelectedBatchIds,
+    toggleSelectedBatchId,
+    getBatchById,
+  } = useBatchStore();
+
   const { exceptions } = useExceptionStore();
   const { vehicles } = useVehicleStore();
   const [isDetailOpen, setIsDetailOpen] = useState(false);
@@ -23,9 +38,17 @@ const BatchArchives: React.FC = () => {
   const normalCount = batches.filter((b) => b.status === 'normal').length;
   const warningCount = batches.filter((b) => b.status === 'warning').length;
 
+  const hasSelected = selectedBatchIds.length > 0;
+  const allSelected = hasSelected && selectedBatchIds.length === batches.length && batches.length > 0;
+  const someSelected = hasSelected && !allSelected;
+
   const handleOpenDetail = (batch: VaccineBatch) => {
-    setSelectedBatch(batch.id);
-    setIsDetailOpen(true);
+    if (monthlyCheckMode) {
+      toggleSelectedBatchId(batch.id);
+    } else {
+      setSelectedBatch(batch.id);
+      setIsDetailOpen(true);
+    }
   };
 
   const handleCloseDetail = () => {
@@ -33,89 +56,157 @@ const BatchArchives: React.FC = () => {
     setTimeout(() => setSelectedBatch(null), 300);
   };
 
-  const handleExportReport = (batch: VaccineBatch) => {
+  const handleSelectAll = () => {
+    if (allSelected) {
+      setSelectedBatchIds([]);
+    } else {
+      setSelectedBatchIds(batches.map((b) => b.id));
+    }
+  };
+
+  const handleExportSingleReport = (batch: VaccineBatch) => {
     const relatedExceptions = exceptions.filter((e) => {
-      const vehicle = vehicles.find((v) => v.id === e.vehicleId);
+      const vehicle = vehicles.find((v: any) => v.id === e.vehicleId);
       return vehicle && vehicle.batchNumbers.includes(batch.batchNumber);
     });
+    const relatedVehicles = vehicles.filter((v: any) => v.batchNumbers.includes(batch.batchNumber));
+    const report = generateBatchReport(batch, relatedExceptions, relatedVehicles);
+    downloadReport(report, `批次倒查报告_${batch.batchNumber}_${new Date().toISOString().slice(0, 10)}.txt`);
+  };
 
-    const relatedVehicles = vehicles.filter((v) => v.batchNumbers.includes(batch.batchNumber));
+  const handleExportSummaryReport = () => {
+    if (!hasSelected) return;
+    const selectedBatches = batches.filter((b) => selectedBatchIds.includes(b.id));
+    const allRelatedExceptions: ExceptionEvent[] = [];
+    const allRelatedVehicles = new Set<string>();
+    let totalQuantity = 0;
+    let totalExceptionCount = 0;
+    let unresolvedCount = 0;
+    const vaccineTypes = new Set<string>();
+
+    selectedBatches.forEach((b) => {
+      totalQuantity += b.quantity;
+      vaccineTypes.add(b.vaccineName);
+      const relatedEx = exceptions.filter((e) => {
+        const vehicle = vehicles.find((v: any) => v.id === e.vehicleId);
+        return vehicle && vehicle.batchNumbers.includes(b.batchNumber);
+      });
+      relatedEx.forEach((ex) => {
+        if (!allRelatedExceptions.find((e) => e.id === ex.id)) {
+          allRelatedExceptions.push(ex);
+        }
+        if (ex.status !== 'resolved') unresolvedCount++;
+        totalExceptionCount++;
+        if (ex.vehicleId) allRelatedVehicles.add(ex.vehicleId);
+      });
+    });
+
+    const district = useBatchStore.getState().batches.length > 0 ? '' : '';
 
     const lines: string[] = [];
-    lines.push('═══════════════════════════════════════════');
-    lines.push('       疫苗批次倒查简要报告');
-    lines.push('═══════════════════════════════════════════');
+    lines.push('═══════════════════════════════════════════════════════════════');
+    lines.push('               疫苗冷链月度检查汇总报告');
+    lines.push('═══════════════════════════════════════════════════════════════');
     lines.push('');
     lines.push(`报告生成时间: ${new Date().toLocaleString('zh-CN')}`);
+    lines.push(`检查周期: ${new Date().toISOString().slice(0, 7)} 月度检查`);
+    lines.push(`辖区范围: ${district || '全市辖区'}`);
     lines.push('');
-    lines.push('【一、批次基础信息】');
-    lines.push(`  批号: ${batch.batchNumber}`);
-    lines.push(`  疫苗名称: ${batch.vaccineName}`);
-    lines.push(`  生产厂家: ${batch.manufacturer}`);
-    lines.push(`  生产日期: ${batch.productionDate}`);
-    lines.push(`  有效期至: ${batch.expiryDate}`);
-    lines.push(`  批次数量: ${batch.quantity.toLocaleString()} 剂`);
-    lines.push(`  起始仓库: ${batch.warehouse}`);
-    lines.push(`  当前状态: ${getBatchStatusText(batch.status)}`);
+    lines.push('【一、检查概要】');
+    lines.push(`  本次检查批次数量: ${selectedBatches.length} 批`);
+    lines.push(`  涉及疫苗品类: ${Array.from(vaccineTypes).join('、')}`);
+    lines.push(`  批次总数量: ${totalQuantity.toLocaleString()} 剂`);
+    lines.push(`  关联异常事件: ${totalExceptionCount} 起`);
+    lines.push(`  待处置异常: ${unresolvedCount} 起`);
+    lines.push(`  涉及运输车辆: ${allRelatedVehicles.size} 辆`);
     lines.push('');
-
-    const hasAnomaly = batch.temperatureRecords.some((r) => r.temp > 8 || r.temp < 2);
-    const avgTemp = batch.temperatureRecords.reduce((sum, r) => sum + r.temp, 0) / (batch.temperatureRecords.length || 1);
-    const maxTemp = Math.max(...batch.temperatureRecords.map((r) => r.temp));
-    const minTemp = Math.min(...batch.temperatureRecords.map((r) => r.temp));
-
-    lines.push('【二、温度监控概要】');
-    lines.push(`  温度异常: ${hasAnomaly ? '是' : '否'}`);
-    lines.push(`  平均温度: ${avgTemp.toFixed(1)}°C`);
-    lines.push(`  最高温度: ${maxTemp.toFixed(1)}°C`);
-    lines.push(`  最低温度: ${minTemp.toFixed(1)}°C`);
+    lines.push('【二、批次状态分布】');
+    lines.push(`  正常批次: ${selectedBatches.filter((b) => b.status === 'normal').length} 批`);
+    lines.push(`  预警批次: ${selectedBatches.filter((b) => b.status === 'warning').length} 批`);
+    lines.push(`  召回批次: ${selectedBatches.filter((b) => b.status === 'recalled').length} 批`);
     lines.push('');
-
-    lines.push('【三、关联异常事件】');
-    if (relatedExceptions.length === 0) {
-      lines.push('  无关联异常');
+    lines.push('【三、异常事件汇总】');
+    if (allRelatedExceptions.length === 0) {
+      lines.push('  本次检查范围内无异常事件，冷链管理情况良好。');
     } else {
-      relatedExceptions.forEach((ex, i) => {
-        lines.push(`  ${i + 1}. [${getExceptionStatusText(ex.status)}] ${getExceptionTypeText(ex.type)} - ${ex.plateNumber}`);
-        lines.push(`     描述: ${ex.description}`);
-        if (ex.handleOpinion) {
-          lines.push(`     处置意见: ${ex.handleOpinion} (${ex.handler} · ${ex.handleTime})`);
-        }
+      const highCount = allRelatedExceptions.filter((e) => e.level === 'high').length;
+      const mediumCount = allRelatedExceptions.filter((e) => e.level === 'medium').length;
+      const lowCount = allRelatedExceptions.filter((e) => e.level === 'low').length;
+      lines.push(`  高风险异常: ${highCount} 起`);
+      lines.push(`  中风险异常: ${mediumCount} 起`);
+      lines.push(`  低风险异常: ${lowCount} 起`);
+      lines.push('');
+      lines.push('  异常类型统计:');
+      const typeMap: Record<string, number> = {};
+      allRelatedExceptions.forEach((ex) => {
+        typeMap[getExceptionTypeText(ex.type)] = (typeMap[getExceptionTypeText(ex.type)] || 0) + 1;
+      });
+      Object.entries(typeMap).forEach(([type, count]) => {
+        lines.push(`    ${type}: ${count} 起`);
+      });
+      lines.push('');
+      lines.push('  处置意见汇总:');
+      allRelatedExceptions
+        .filter((e) => e.handleOpinion)
+        .forEach((ex, i) => {
+          lines.push(`    ${i + 1}. [${getExceptionTypeText(ex.type)}] ${ex.plateNumber}`);
+          lines.push(`       处置意见: ${ex.handleOpinion}`);
+          lines.push(`       处置人: ${ex.handler} · ${ex.handleTime}`);
+        });
+    }
+    lines.push('');
+    lines.push('【四、涉及车辆状态汇总】');
+    if (allRelatedVehicles.size === 0) {
+      lines.push('  无涉及车辆。');
+    } else {
+      const vList = vehicles.filter((v: any) => allRelatedVehicles.has(v.id));
+      vList.forEach((v: any, i) => {
+        const isAbnormal = v.currentTemp > 8 || v.currentTemp < 2;
+        lines.push(`  ${i + 1}. ${v.plateNumber} (${v.carrier})`);
+        lines.push(`     司机: ${v.driver} · 线路: ${v.route}`);
+        lines.push(`     状态: ${getVehicleStatusText(v.status)} · 当前温度: ${formatTemperature(v.currentTemp)}${isAbnormal ? ' (温度异常)' : ''}`);
       });
     }
     lines.push('');
-
-    lines.push('【四、涉及车辆及当前状态】');
-    if (relatedVehicles.length === 0) {
-      lines.push('  无关联车辆');
-    } else {
-      relatedVehicles.forEach((v, i) => {
-        lines.push(`  ${i + 1}. ${v.plateNumber} (${v.carrier}) - ${getVehicleStatusText(v.status)} - 当前温度: ${formatTemperature(v.currentTemp)}`);
+    lines.push('【五、各批次详情】');
+    selectedBatches.forEach((batch, idx) => {
+      const relatedEx = exceptions.filter((e) => {
+        const vehicle = vehicles.find((v: any) => v.id === e.vehicleId);
+        return vehicle && vehicle.batchNumbers.includes(batch.batchNumber);
       });
-    }
-    lines.push('');
+      const relatedVs = vehicles.filter((v: any) => v.batchNumbers.includes(batch.batchNumber));
+      const hasAbnormal = batch.temperatureRecords.some((r) => r.temp > 8 || r.temp < 2);
+      const avgTemp = batch.temperatureRecords.reduce((sum, r) => sum + r.temp, 0) / (batch.temperatureRecords.length || 1);
+      const maxTemp = Math.max(...batch.temperatureRecords.map((r) => r.temp));
+      const minTemp = Math.min(...batch.temperatureRecords.map((r) => r.temp));
 
-    lines.push('【五、全链路运输记录】');
-    batch.transportChain.forEach((node) => {
-      lines.push(`  [${node.type === 'warehouse' ? '仓库' : node.type === 'vehicle' ? '车辆' : '站点'}] ${node.name} | ${node.person} | ${node.time}`);
-      lines.push(`    ${node.description}`);
+      lines.push('');
+      lines.push(`  ${idx + 1}. ${batch.batchNumber} (${batch.vaccineName})`);
+      lines.push(`     厂家: ${batch.manufacturer} · 数量: ${batch.quantity.toLocaleString()} 剂`);
+      lines.push(`     状态: ${getBatchStatusText(batch.status)} · 温度状态: ${hasAbnormal ? '存在异常' : '全程正常'}`);
+      lines.push(`     温度统计: 平均 ${avgTemp.toFixed(1)}°C · 最高 ${maxTemp.toFixed(1)}°C · 最低 ${minTemp.toFixed(1)}°C`);
+      lines.push(`     关联异常: ${relatedEx.length} 起 · 涉及车辆: ${relatedVs.length} 辆`);
+      if (relatedEx.length > 0) {
+        relatedEx.forEach((ex, j) => {
+          lines.push(`       [${j + 1}] ${getExceptionTypeText(ex.type)} (${getExceptionStatusText(ex.status)})`);
+          if (ex.handleOpinion) {
+            lines.push(`           处置: ${ex.handleOpinion}`);
+          }
+        });
+      }
     });
     lines.push('');
-    lines.push('═══════════════════════════════════════════');
+    lines.push('═══════════════════════════════════════════════════════════════');
     lines.push('  本报告由疾控中心冷链监管系统自动生成');
-    lines.push('═══════════════════════════════════════════');
+    lines.push('═══════════════════════════════════════════════════════════════');
 
-    const blob = new Blob([lines.join('\n')], { type: 'text/plain;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `批次倒查报告_${batch.batchNumber}_${new Date().toISOString().slice(0, 10)}.txt`;
-    a.click();
-    URL.revokeObjectURL(url);
+    downloadReport(lines.join('\n'), `月度检查汇总报告_${selectedBatches.length}批_${new Date().toISOString().slice(0, 10)}.txt`);
   };
 
   return (
     <div className="h-full flex flex-col gap-5 -m-6 p-6">
+      <JurisdictionSelector />
+
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatsCard
           title="批次总数"
@@ -180,74 +271,176 @@ const BatchArchives: React.FC = () => {
             <option key={s.value} value={s.value}>{s.label}</option>
           ))}
         </select>
-        <button className="btn-secondary ml-auto" onClick={resetFilters}>
-          <RotateCcw className="w-4 h-4" />
-          <span>重置</span>
-        </button>
+        <div className="flex items-center gap-2 ml-auto">
+          <button
+            className={`px-3 py-1.5 text-xs font-medium rounded-md border transition-colors flex items-center gap-1.5 ${
+              monthlyCheckMode
+                ? 'bg-primary-600 border-primary-500 text-white'
+                : 'bg-dashboard-card border-dashboard-border text-slate-400 hover:text-white hover:border-primary-500/50'
+            }`}
+            onClick={() => setMonthlyCheckMode(!monthlyCheckMode)}
+          >
+            <FileSpreadsheet className="w-3.5 h-3.5" />
+            月度检查模式
+          </button>
+          <button className="btn-secondary" onClick={resetFilters}>
+            <RotateCcw className="w-4 h-4" />
+            <span>重置</span>
+          </button>
+        </div>
       </div>
+
+      {monthlyCheckMode && (
+        <div className="dashboard-card p-3 bg-primary-500/5 border-primary-500/20 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <label className="flex items-center gap-2 text-sm text-slate-300 cursor-pointer">
+              {allSelected ? (
+                <CheckSquare className="w-4 h-4 text-primary-400" />
+              ) : someSelected ? (
+                <CheckSquare className="w-4 h-4 text-primary-400 opacity-60" />
+              ) : (
+                <Square className="w-4 h-4 text-slate-500" />
+              )}
+              <span onClick={handleSelectAll}>全选</span>
+            </label>
+            <span className="text-xs text-slate-500">
+              已选择 <span className="text-primary-400 font-medium">{selectedBatchIds.length}</span> / {batches.length} 批
+            </span>
+          </div>
+          <button
+            className="btn-primary text-xs"
+            onClick={handleExportSummaryReport}
+            disabled={!hasSelected}
+          >
+            <Download className="w-4 h-4" />
+            <span>导出汇总报告</span>
+          </button>
+        </div>
+      )}
 
       <div className="dashboard-card flex-1 overflow-hidden flex flex-col">
         <div className="px-4 py-3 border-b border-dashboard-border flex items-center justify-between">
-          <h3 className="text-sm font-semibold text-white">批次档案列表</h3>
+          <h3 className="text-sm font-semibold text-white">
+            {monthlyCheckMode ? '月度检查批次列表' : '批次档案列表'}
+          </h3>
           <span className="text-xs text-slate-500">共 {batches.length} 条记录</span>
         </div>
         <div className="overflow-auto flex-1">
           <table className="w-full">
             <thead>
               <tr className="bg-dashboard-surface text-left text-xs text-slate-400 sticky top-0">
+                {monthlyCheckMode && (
+                  <th className="px-3 py-3 font-medium w-12">
+                    <label className="flex items-center justify-center">
+                      {allSelected ? (
+                        <CheckSquare className="w-4 h-4 text-primary-400 cursor-pointer" onClick={handleSelectAll} />
+                      ) : someSelected ? (
+                        <CheckSquare className="w-4 h-4 text-primary-400 opacity-60 cursor-pointer" onClick={handleSelectAll} />
+                      ) : (
+                        <Square className="w-4 h-4 text-slate-500 cursor-pointer" onClick={handleSelectAll} />
+                      )}
+                    </label>
+                  </th>
+                )}
                 <th className="px-4 py-3 font-medium">批号</th>
                 <th className="px-4 py-3 font-medium">疫苗名称</th>
                 <th className="px-4 py-3 font-medium">生产厂家</th>
                 <th className="px-4 py-3 font-medium">数量</th>
                 <th className="px-4 py-3 font-medium">生产日期</th>
                 <th className="px-4 py-3 font-medium">有效期</th>
-                <th className="px-4 py-3 font-medium">起始仓库</th>
+                <th className="px-4 py-3 font-medium">异常数</th>
                 <th className="px-4 py-3 font-medium">状态</th>
                 <th className="px-4 py-3 font-medium text-right">操作</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-dashboard-border">
-              {batches.map((batch, idx) => (
-                <tr
-                  key={batch.id}
-                  className="hover:bg-dashboard-hover transition-colors cursor-pointer animate-fade-in"
-                  style={{ animationDelay: `${idx * 30}ms` }}
-                  onClick={() => handleOpenDetail(batch)}
-                >
-                  <td className="px-4 py-3">
-                    <span className="font-mono text-sm text-white">{batch.batchNumber}</span>
-                  </td>
-                  <td className="px-4 py-3 text-sm text-slate-200">{batch.vaccineName}</td>
-                  <td className="px-4 py-3 text-sm text-slate-400">{batch.manufacturer}</td>
-                  <td className="px-4 py-3 text-sm text-slate-200 data-number">{batch.quantity.toLocaleString()} 剂</td>
-                  <td className="px-4 py-3 text-sm text-slate-400 data-number">{batch.productionDate}</td>
-                  <td className="px-4 py-3 text-sm text-slate-400 data-number">{batch.expiryDate}</td>
-                  <td className="px-4 py-3 text-sm text-slate-400">{batch.warehouse}</td>
-                  <td className="px-4 py-3">
-                    <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs ${
-                      batch.status === 'normal' ? 'bg-emerald-500/20 text-emerald-400' :
-                      batch.status === 'warning' ? 'bg-amber-500/20 text-amber-400' :
-                      'bg-red-500/20 text-red-400'
-                    }`}>
-                      <span className={`status-dot ${
-                        batch.status === 'normal' ? 'bg-emerald-500' :
-                        batch.status === 'warning' ? 'bg-amber-500' :
-                        'bg-red-500'
-                      }`} />
-                      {getBatchStatusText(batch.status)}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 text-right">
-                    <button className="text-primary-400 hover:text-primary-300 text-sm flex items-center gap-1 ml-auto">
-                      <span>倒查</span>
-                      <ChevronRight className="w-4 h-4" />
-                    </button>
-                  </td>
-                </tr>
-              ))}
+              {batches.map((batch, idx) => {
+                const relatedExceptions = exceptions.filter((e) => {
+                  const vehicle = vehicles.find((v: any) => v.id === e.vehicleId);
+                  return vehicle && vehicle.batchNumbers.includes(batch.batchNumber);
+                });
+                const hasUnresolved = relatedExceptions.some((e) => e.status !== 'resolved');
+                const isSelected = selectedBatchIds.includes(batch.id);
+
+                return (
+                  <tr
+                    key={batch.id}
+                    className={`hover:bg-dashboard-hover transition-colors animate-fade-in ${
+                      isSelected ? 'bg-primary-500/10' : ''
+                    }`}
+                    style={{ animationDelay: `${idx * 30}ms` }}
+                    onClick={() => handleOpenDetail(batch)}
+                  >
+                    {monthlyCheckMode && (
+                      <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
+                        <label className="flex items-center justify-center cursor-pointer">
+                          {isSelected ? (
+                            <CheckSquare className="w-4 h-4 text-primary-400" onClick={() => toggleSelectedBatchId(batch.id)} />
+                          ) : (
+                            <Square className="w-4 h-4 text-slate-500 hover:text-slate-300" onClick={() => toggleSelectedBatchId(batch.id)} />
+                          )}
+                        </label>
+                      </td>
+                    )}
+                    <td className="px-4 py-3">
+                      <span className="font-mono text-sm text-white">{batch.batchNumber}</span>
+                    </td>
+                    <td className="px-4 py-3 text-sm text-slate-200">{batch.vaccineName}</td>
+                    <td className="px-4 py-3 text-sm text-slate-400">{batch.manufacturer}</td>
+                    <td className="px-4 py-3 text-sm text-slate-200 data-number">{batch.quantity.toLocaleString()} 剂</td>
+                    <td className="px-4 py-3 text-sm text-slate-400 data-number">{batch.productionDate}</td>
+                    <td className="px-4 py-3 text-sm text-slate-400 data-number">{batch.expiryDate}</td>
+                    <td className="px-4 py-3">
+                      {relatedExceptions.length > 0 ? (
+                        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs ${
+                          hasUnresolved ? 'bg-red-500/20 text-red-400' : 'bg-amber-500/20 text-amber-400'
+                        }`}>
+                          <AlertTriangle className="w-3 h-3" />
+                          {relatedExceptions.length}
+                        </span>
+                      ) : (
+                        <span className="text-xs text-slate-600">-</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs ${
+                        batch.status === 'normal' ? 'bg-emerald-500/20 text-emerald-400' :
+                        batch.status === 'warning' ? 'bg-amber-500/20 text-amber-400' :
+                        'bg-red-500/20 text-red-400'
+                      }`}>
+                        <span className={`status-dot ${
+                          batch.status === 'normal' ? 'bg-emerald-500' :
+                          batch.status === 'warning' ? 'bg-amber-500' :
+                          'bg-red-500'
+                        }`} />
+                        {getBatchStatusText(batch.status)}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      {monthlyCheckMode ? (
+                        <button
+                          className="text-xs text-slate-400 hover:text-primary-400 flex items-center gap-1 ml-auto"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedBatch(batch.id);
+                            setIsDetailOpen(true);
+                          }}
+                        >
+                          查看 <ChevronRight className="w-4 h-4" />
+                        </button>
+                      ) : (
+                        <button className="text-primary-400 hover:text-primary-300 text-sm flex items-center gap-1 ml-auto">
+                          <span>倒查</span>
+                          <ChevronRight className="w-4 h-4" />
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
               {batches.length === 0 && (
                 <tr>
-                  <td colSpan={9} className="px-4 py-16 text-center text-slate-500">
+                  <td colSpan={monthlyCheckMode ? 10 : 9} className="px-4 py-16 text-center text-slate-500">
                     <FileBarChart className="w-12 h-12 mx-auto mb-3 text-slate-600" />
                     <div>未找到匹配的批次记录</div>
                   </td>
@@ -262,7 +455,7 @@ const BatchArchives: React.FC = () => {
         <BatchDetailDrawer
           batch={selectedBatch}
           onClose={handleCloseDetail}
-          onExport={handleExportReport}
+          onExport={handleExportSingleReport}
           exceptions={exceptions}
           vehicles={vehicles}
         />
@@ -409,9 +602,9 @@ const BatchDetailDrawer: React.FC<{
                       <div className="mt-2 pt-2 border-t border-dashboard-border">
                         <div className="flex items-center gap-1.5 text-xs text-slate-500 mb-1">
                           <User className="w-3 h-3" />
-                          <span>处置意见 · {ex.handler} · {ex.handleTime}</span>
+                          <span>最新处置意见 · {ex.handler} · {formatDateTime(ex.handleTime!)}</span>
                         </div>
-                        <div className="text-xs text-slate-300 bg-dashboard-hover p-2 rounded">
+                        <div className="text-xs text-primary-300 bg-dashboard-hover p-2 rounded">
                           {ex.handleOpinion}
                         </div>
                       </div>
@@ -570,5 +763,88 @@ const BatchDetailDrawer: React.FC<{
     </div>
   );
 };
+
+function generateBatchReport(
+  batch: VaccineBatch,
+  relatedExceptions: any[],
+  relatedVehicles: any[]
+): string {
+  const lines: string[] = [];
+  lines.push('═══════════════════════════════════════════════════════════════');
+  lines.push('                       疫苗批次倒查简要报告');
+  lines.push('═══════════════════════════════════════════════════════════════');
+  lines.push('');
+  lines.push(`报告生成时间: ${new Date().toLocaleString('zh-CN')}`);
+  lines.push('');
+  lines.push('【一、批次基础信息】');
+  lines.push(`  批号: ${batch.batchNumber}`);
+  lines.push(`  疫苗名称: ${batch.vaccineName}`);
+  lines.push(`  生产厂家: ${batch.manufacturer}`);
+  lines.push(`  生产日期: ${batch.productionDate}`);
+  lines.push(`  有效期至: ${batch.expiryDate}`);
+  lines.push(`  批次数量: ${batch.quantity.toLocaleString()} 剂`);
+  lines.push(`  起始仓库: ${batch.warehouse}`);
+  lines.push(`  当前状态: ${getBatchStatusText(batch.status)}`);
+  lines.push('');
+
+  const hasAnomaly = batch.temperatureRecords.some((r) => r.temp > 8 || r.temp < 2);
+  const avgTemp = batch.temperatureRecords.reduce((sum, r) => sum + r.temp, 0) / (batch.temperatureRecords.length || 1);
+  const maxTemp = Math.max(...batch.temperatureRecords.map((r) => r.temp));
+  const minTemp = Math.min(...batch.temperatureRecords.map((r) => r.temp));
+
+  lines.push('【二、温度监控概要】');
+  lines.push(`  温度异常: ${hasAnomaly ? '是' : '否'}`);
+  lines.push(`  平均温度: ${avgTemp.toFixed(1)}°C`);
+  lines.push(`  最高温度: ${maxTemp.toFixed(1)}°C`);
+  lines.push(`  最低温度: ${minTemp.toFixed(1)}°C`);
+  lines.push('');
+
+  lines.push('【三、关联异常事件】');
+  if (relatedExceptions.length === 0) {
+    lines.push('  无关联异常');
+  } else {
+    relatedExceptions.forEach((ex, i) => {
+      lines.push(`  ${i + 1}. [${getExceptionStatusText(ex.status)}] ${getExceptionTypeText(ex.type)} - ${ex.plateNumber}`);
+      lines.push(`     描述: ${ex.description}`);
+      if (ex.handleOpinion) {
+        lines.push(`     最新处置意见: ${ex.handleOpinion} (${ex.handler} · ${ex.handleTime})`);
+      }
+    });
+  }
+  lines.push('');
+
+  lines.push('【四、涉及车辆及当前状态】');
+  if (relatedVehicles.length === 0) {
+    lines.push('  无关联车辆');
+  } else {
+    relatedVehicles.forEach((v, i) => {
+      const isAbnormal = v.currentTemp > 8 || v.currentTemp < 2;
+      lines.push(`  ${i + 1}. ${v.plateNumber} (${v.carrier}) - ${getVehicleStatusText(v.status)} - 当前温度: ${formatTemperature(v.currentTemp)}${isAbnormal ? ' (温度异常)' : ''}`);
+    });
+  }
+  lines.push('');
+
+  lines.push('【五、全链路运输记录】');
+  batch.transportChain.forEach((node) => {
+    lines.push(`  [${node.type === 'warehouse' ? '仓库' : node.type === 'vehicle' ? '车辆' : '站点'}] ${node.name} | ${node.person} | ${node.time}`);
+    lines.push(`    ${node.description}`);
+  });
+  lines.push('');
+  lines.push('═══════════════════════════════════════════════════════════════');
+  lines.push('  本报告由疾控中心冷链监管系统自动生成');
+  lines.push('═══════════════════════════════════════════════════════════════');
+
+  return lines.join('\n');
+}
+
+function downloadReport(content: string, filename: string) {
+  const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
 
 export default BatchArchives;

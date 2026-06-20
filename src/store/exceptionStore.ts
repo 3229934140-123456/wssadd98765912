@@ -1,6 +1,8 @@
 import { create } from 'zustand';
 import type { ExceptionEvent, RiskLevel, ExceptionStatus } from '@/types';
 import { mockExceptions } from '@/mock/exceptions';
+import { useJurisdictionStore } from '@/store/jurisdictionStore';
+import { useVehicleStore } from '@/store/vehicleStore';
 
 interface ExceptionState {
   exceptions: ExceptionEvent[];
@@ -35,6 +37,16 @@ const sortByLevelAndTime = (list: ExceptionEvent[]) => {
   });
 };
 
+const filterByJurisdiction = (list: ExceptionEvent[]) => {
+  const { district } = useJurisdictionStore.getState().getFilter();
+  if (!district) return list;
+  const { vehicles } = useVehicleStore.getState();
+  const districtVehicleIds = new Set(
+    vehicles.filter((v) => v.district === district).map((v) => v.id)
+  );
+  return list.filter((e) => districtVehicleIds.has(e.vehicleId));
+};
+
 export const useExceptionStore = create<ExceptionState>((set, get) => ({
   exceptions: mockExceptions,
   activeLevel: 'all',
@@ -49,16 +61,21 @@ export const useExceptionStore = create<ExceptionState>((set, get) => ({
 
   getExceptionsByLevel: (level) => {
     const { exceptions } = get();
-    const list = level === 'all' ? exceptions : exceptions.filter((e) => e.level === level);
+    let list = level === 'all' ? exceptions : exceptions.filter((e) => e.level === level);
+    list = filterByJurisdiction(list);
     return sortByLevelAndTime(list);
   },
 
   getExceptionsByStatus: (status) => {
-    return get().exceptions.filter((e) => e.status === status);
+    let list = get().exceptions.filter((e) => e.status === status);
+    return filterByJurisdiction(list);
   },
 
   getExceptionsByBatchNumbers: (batchNumbers) => {
-    return get().exceptions.filter((e) => e.vehicleId && batchNumbers.length > 0);
+    return get().exceptions.filter((e) => {
+      const vehicle = useVehicleStore.getState().vehicles.find((v) => v.id === e.vehicleId);
+      return vehicle && vehicle.batchNumbers.some((bn) => batchNumbers.includes(bn));
+    });
   },
 
   handleException: (id, opinion, handler) => {
@@ -81,15 +98,15 @@ export const useExceptionStore = create<ExceptionState>((set, get) => ({
   },
 
   getStats: () => {
-    const { exceptions } = get();
+    const list = filterByJurisdiction(get().exceptions);
     return {
-      total: exceptions.length,
-      high: exceptions.filter((e) => e.level === 'high').length,
-      medium: exceptions.filter((e) => e.level === 'medium').length,
-      low: exceptions.filter((e) => e.level === 'low').length,
-      pending: exceptions.filter((e) => e.status === 'pending').length,
-      handling: exceptions.filter((e) => e.status === 'handling').length,
-      resolved: exceptions.filter((e) => e.status === 'resolved').length,
+      total: list.length,
+      high: list.filter((e) => e.level === 'high').length,
+      medium: list.filter((e) => e.level === 'medium').length,
+      low: list.filter((e) => e.level === 'low').length,
+      pending: list.filter((e) => e.status === 'pending').length,
+      handling: list.filter((e) => e.status === 'handling').length,
+      resolved: list.filter((e) => e.status === 'resolved').length,
     };
   },
 }));

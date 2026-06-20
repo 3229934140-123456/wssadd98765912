@@ -1,21 +1,20 @@
 import { create } from 'zustand';
-import type { Vehicle, TrackPoint, VehicleFilters, JurisdictionLevel, CountyDistrict } from '@/types';
+import type { Vehicle, TrackPoint, VehicleFilters, CountyDistrict } from '@/types';
 import { mockVehicles, mockTrackPoints } from '@/mock/vehicles';
+import { useJurisdictionStore } from '@/store/jurisdictionStore';
 
 interface VehicleState {
   vehicles: Vehicle[];
   trackPoints: Record<string, TrackPoint[]>;
   selectedVehicleId: string | null;
   filters: VehicleFilters;
-  jurisdiction: JurisdictionLevel;
-  countyDistrict: CountyDistrict | '';
   highlightTrackSegment: { vehicleId: string; pointIds: string[] } | null;
+  activeExceptionId: string | null;
   setSelectedVehicle: (id: string | null) => void;
   setFilters: (filters: Partial<VehicleFilters>) => void;
   resetFilters: () => void;
-  setJurisdiction: (level: JurisdictionLevel) => void;
-  setCountyDistrict: (district: CountyDistrict | '') => void;
   setHighlightTrackSegment: (segment: { vehicleId: string; pointIds: string[] } | null) => void;
+  setActiveExceptionId: (id: string | null) => void;
   getFilteredVehicles: () => Vehicle[];
   getTrackPointsByVehicleId: (id: string) => TrackPoint[];
   getVehicleStats: () => {
@@ -39,9 +38,8 @@ export const useVehicleStore = create<VehicleState>((set, get) => ({
   trackPoints: mockTrackPoints,
   selectedVehicleId: null,
   filters: defaultFilters,
-  jurisdiction: 'city',
-  countyDistrict: '',
   highlightTrackSegment: null,
+  activeExceptionId: null,
 
   setSelectedVehicle: (id) => set({ selectedVehicleId: id }),
 
@@ -50,19 +48,15 @@ export const useVehicleStore = create<VehicleState>((set, get) => ({
 
   resetFilters: () => set({ filters: defaultFilters }),
 
-  setJurisdiction: (level) => set({
-    jurisdiction: level,
-    countyDistrict: level === 'city' ? '' : get().countyDistrict || '',
-  }),
-
-  setCountyDistrict: (district) => set({ countyDistrict: district }),
-
   setHighlightTrackSegment: (segment) => set({ highlightTrackSegment: segment }),
 
+  setActiveExceptionId: (id) => set({ activeExceptionId: id }),
+
   getFilteredVehicles: () => {
-    const { vehicles, filters, jurisdiction, countyDistrict } = get();
+    const { vehicles, filters } = get();
+    const { district } = useJurisdictionStore.getState().getFilter();
     return vehicles.filter((v) => {
-      if (jurisdiction === 'county' && countyDistrict && v.district !== countyDistrict) return false;
+      if (district && v.district !== district) return false;
       if (filters.route && v.route !== filters.route) return false;
       if (filters.carrier && v.carrier !== filters.carrier) return false;
       if (filters.vaccineType && v.vaccineType !== filters.vaccineType) return false;

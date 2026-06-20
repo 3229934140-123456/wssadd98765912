@@ -86,3 +86,62 @@ export const getBatchStatusText = (status: string): string => {
   };
   return map[status] || status;
 };
+
+import type { ExceptionEvent, TrackPoint } from '@/types';
+
+export const getRelevantPointIdsForException = (ex: ExceptionEvent, trackPoints: TrackPoint[]): string[] => {
+  if (trackPoints.length === 0) return [];
+  const exTime = new Date(ex.timestamp).getTime();
+  const sortedTps = [...trackPoints].sort(
+    (a, b) => Math.abs(new Date(a.timestamp).getTime() - exTime) - Math.abs(new Date(b.timestamp).getTime() - exTime)
+  );
+  const relevantIds: string[] = [];
+  const timeRange = 30 * 60 * 1000;
+
+  if (ex.type === 'over-temperature' || ex.type === 'door-open') {
+    const abnormalTps = trackPoints.filter(
+      (tp) => tp.temp > 8 || tp.temp < 2 || tp.eventType === 'door-open' || tp.eventType === 'door-close'
+    );
+    relevantIds.push(...abnormalTps.map((tp) => tp.id));
+    trackPoints.forEach((tp) => {
+      const tpTime = new Date(tp.timestamp).getTime();
+      if (Math.abs(tpTime - exTime) <= timeRange && !relevantIds.includes(tp.id)) {
+        relevantIds.push(tp.id);
+      }
+    });
+  } else if (ex.type === 'long-stop') {
+    const stopTps = trackPoints.filter((tp) => tp.eventType === 'stop');
+    relevantIds.push(...stopTps.map((tp) => tp.id));
+    trackPoints.forEach((tp) => {
+      const tpTime = new Date(tp.timestamp).getTime();
+      if (Math.abs(tpTime - exTime) <= timeRange && !relevantIds.includes(tp.id)) {
+        relevantIds.push(tp.id);
+      }
+    });
+  } else if (ex.type === 'route-deviation') {
+    relevantIds.push(sortedTps[0].id);
+    const closestIdx = trackPoints.findIndex((tp) => tp.id === sortedTps[0].id);
+    const startIdx = Math.max(0, closestIdx - 2);
+    const endIdx = Math.min(trackPoints.length - 1, closestIdx + 2);
+    for (let i = startIdx; i <= endIdx; i++) {
+      if (!relevantIds.includes(trackPoints[i].id)) {
+        relevantIds.push(trackPoints[i].id);
+      }
+    }
+  }
+
+  if (relevantIds.length < 2 && trackPoints.length >= 2) {
+    const closestIdx = trackPoints.findIndex((tp) => tp.id === sortedTps[0].id);
+    const startIdx = Math.max(0, closestIdx - 1);
+    const endIdx = Math.min(trackPoints.length - 1, closestIdx + 1);
+    for (let i = startIdx; i <= endIdx; i++) {
+      if (!relevantIds.includes(trackPoints[i].id)) {
+        relevantIds.push(trackPoints[i].id);
+      }
+    }
+  }
+
+  const idSet = new Set(relevantIds);
+  const orderedIds = trackPoints.filter((tp) => idSet.has(tp.id)).map((tp) => tp.id);
+  return orderedIds;
+};

@@ -3,10 +3,11 @@ import { AlertTriangle, Thermometer, MapPin, Clock, User, Send, CheckCircle, Ale
 import { useNavigate } from 'react-router-dom';
 import StatsCard from '@/components/StatsCard';
 import RiskBadge from '@/components/RiskBadge';
+import JurisdictionSelector from '@/components/JurisdictionSelector';
 import { useExceptionStore } from '@/store/exceptionStore';
 import { useVehicleStore } from '@/store/vehicleStore';
-import type { ExceptionEvent, RiskLevel } from '@/types';
-import { formatTemperature, formatRelativeTime, formatDateTime, getExceptionTypeText, getExceptionStatusText } from '@/utils/format';
+import type { ExceptionEvent, RiskLevel, TrackPoint } from '@/types';
+import { formatTemperature, formatRelativeTime, formatDateTime, getExceptionTypeText, getExceptionStatusText, getRelevantPointIdsForException } from '@/utils/format';
 
 const typeIcons: Record<string, any> = {
   'over-temperature': Thermometer,
@@ -56,15 +57,17 @@ const ExceptionHandling: React.FC = () => {
     setLocateVehicleId(exception.vehicleId);
     setSelectedVehicle(exception.vehicleId);
     const tps = useVehicleStore.getState().trackPoints[exception.vehicleId] || [];
-    const eventPointIds = tps.filter((tp) => tp.eventType !== 'normal').map((tp) => tp.id);
-    if (eventPointIds.length > 0) {
-      setHighlightTrackSegment({ vehicleId: exception.vehicleId, pointIds: eventPointIds });
+    const relevantIds = getRelevantPointIdsForException(exception, tps);
+    if (relevantIds.length > 0) {
+      setHighlightTrackSegment({ vehicleId: exception.vehicleId, pointIds: relevantIds });
     }
     navigate('/map-overview');
   };
 
   return (
     <div className="h-full flex flex-col gap-5 -m-6 p-6">
+      <JurisdictionSelector />
+
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatsCard
           title="待处理"
