@@ -16,6 +16,8 @@ interface ExceptionState {
   getExceptionsByStatus: (status: ExceptionStatus) => ExceptionEvent[];
   getExceptionsByBatchNumbers: (batchNumbers: string[]) => ExceptionEvent[];
   handleException: (id: string, opinion: string, handler: string) => void;
+  addCarrierFeedback: (id: string, feedback: string, photos?: string[]) => void;
+  resolveException: (id: string, resolver: string) => void;
   getStats: () => {
     total: number;
     high: number;
@@ -91,6 +93,42 @@ export const useExceptionStore = create<ExceptionState>((set, get) => ({
               handleOpinion: opinion,
               handler,
               handleTime: timeStr,
+            }
+          : e
+      ),
+    }));
+  },
+
+  addCarrierFeedback: (id, feedback, photos) => {
+    const now = new Date();
+    const timeStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+
+    set((state) => ({
+      exceptions: state.exceptions.map((e) =>
+        e.id === id
+          ? {
+              ...e,
+              carrierFeedback: feedback,
+              carrierFeedbackTime: timeStr,
+              carrierPhotos: photos || e.carrierPhotos || [],
+            }
+          : e
+      ),
+    }));
+  },
+
+  resolveException: (id, resolver) => {
+    const now = new Date();
+    const timeStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+
+    set((state) => ({
+      exceptions: state.exceptions.map((e) =>
+        e.id === id
+          ? {
+              ...e,
+              status: 'resolved' as ExceptionStatus,
+              resolveTime: timeStr,
+              resolver,
             }
           : e
       ),

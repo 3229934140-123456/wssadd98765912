@@ -1,12 +1,12 @@
 import React, { useState } from 'react';
-import { AlertTriangle, Thermometer, MapPin, Clock, User, Send, CheckCircle, AlertCircle, Navigation, DoorOpen, PauseCircle, X, MessageSquare, Crosshair } from 'lucide-react';
+import { AlertTriangle, Thermometer, MapPin, Clock, User, Send, CheckCircle, AlertCircle, Navigation, DoorOpen, PauseCircle, X, MessageSquare, Crosshair, FileText, Camera, ShieldCheck } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import StatsCard from '@/components/StatsCard';
 import RiskBadge from '@/components/RiskBadge';
 import JurisdictionSelector from '@/components/JurisdictionSelector';
 import { useExceptionStore } from '@/store/exceptionStore';
 import { useVehicleStore } from '@/store/vehicleStore';
-import type { ExceptionEvent, RiskLevel, TrackPoint } from '@/types';
+import type { ExceptionEvent, RiskLevel } from '@/types';
 import { formatTemperature, formatRelativeTime, formatDateTime, getExceptionTypeText, getExceptionStatusText, getRelevantPointIdsForException } from '@/utils/format';
 
 const typeIcons: Record<string, any> = {
@@ -23,13 +23,29 @@ const handleOptions = [
   { value: '联系司机确认', label: '联系司机确认', type: 'primary' },
 ];
 
+type FeedbackModal = null | 'carrier' | 'resolve';
+
 const ExceptionHandling: React.FC = () => {
   const navigate = useNavigate();
-  const { activeLevel, setActiveLevel, getExceptionsByLevel, handleException, getStats, selectedExceptionId, setSelectedException, setLocateVehicleId } = useExceptionStore();
-  const { setHighlightTrackSegment, setSelectedVehicle } = useVehicleStore();
+  const {
+    activeLevel,
+    setActiveLevel,
+    getExceptionsByLevel,
+    handleException,
+    addCarrierFeedback,
+    resolveException,
+    getStats,
+    selectedExceptionId,
+    setSelectedException,
+    setLocateVehicleId,
+  } = useExceptionStore();
+  const { setHighlightTrackSegment, setSelectedVehicle, setActiveExceptionId } = useVehicleStore();
   const [selectedOpinion, setSelectedOpinion] = useState('');
   const [customOpinion, setCustomOpinion] = useState('');
   const [handlerName, setHandlerName] = useState('市级管理员');
+  const [feedbackModal, setFeedbackModal] = useState<FeedbackModal>(null);
+  const [carrierFeedbackText, setCarrierFeedbackText] = useState('');
+  const [resolverName, setResolverName] = useState('市级管理员');
 
   const stats = getStats();
   const exceptions = getExceptionsByLevel(activeLevel);
@@ -49,13 +65,26 @@ const ExceptionHandling: React.FC = () => {
     handleException(selectedExceptionId, opinion, handlerName);
     setSelectedOpinion('');
     setCustomOpinion('');
-    setSelectedException(null);
+  };
+
+  const handleCarrierFeedbackSubmit = () => {
+    if (!selectedExceptionId || !carrierFeedbackText.trim()) return;
+    addCarrierFeedback(selectedExceptionId, carrierFeedbackText.trim(), []);
+    setCarrierFeedbackText('');
+    setFeedbackModal(null);
+  };
+
+  const handleResolveSubmit = () => {
+    if (!selectedExceptionId || !resolverName.trim()) return;
+    resolveException(selectedExceptionId, resolverName.trim());
+    setFeedbackModal(null);
   };
 
   const handleLocateOnMap = (exception: ExceptionEvent) => {
     if (!exception.vehicleId) return;
     setLocateVehicleId(exception.vehicleId);
     setSelectedVehicle(exception.vehicleId);
+    setActiveExceptionId(exception.id);
     const tps = useVehicleStore.getState().trackPoints[exception.vehicleId] || [];
     const relevantIds = getRelevantPointIdsForException(exception, tps);
     if (relevantIds.length > 0) {
@@ -202,8 +231,47 @@ const ExceptionHandling: React.FC = () => {
                     onClick={() => handleLocateOnMap(selectedException)}
                   >
                     <Crosshair className="w-3.5 h-3.5" />
-                    <span>定位到地图</span>
+                    <span>定位到地图复盘</span>
                   </button>
+                </div>
+              </div>
+
+              <div className="dashboard-card p-4">
+                <div className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
+                  <ShieldCheck className="w-4 h-4 text-primary-400" />
+                  处置闭环进度
+                </div>
+                <div className="flex items-start gap-2">
+                  {[
+                    { key: 'opinion', label: '下发处置意见', done: !!selectedException.handleOpinion, icon: Send },
+                    { key: 'feedback', label: '承运方反馈', done: !!selectedException.carrierFeedback, icon: FileText },
+                    { key: 'resolve', label: '闭环确认', done: selectedException.status === 'resolved', icon: CheckCircle },
+                  ].map((step, idx, arr) => (
+                    <React.Fragment key={step.key}>
+                      <div className="flex flex-col items-center flex-1">
+                        <div className={`w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0 ${
+                          step.done ? 'bg-emerald-500/20 text-emerald-400' : 'bg-dashboard-hover text-slate-500'
+                        }`}>
+                          {React.createElement(step.icon, { className: 'w-4 h-4' })}
+                        </div>
+                        <div className={`mt-2 text-xs text-center ${step.done ? 'text-emerald-400' : 'text-slate-500'}`}>
+                          {step.label}
+                        </div>
+                        {step.done && (
+                          <div className="mt-1 text-[10px] text-slate-500">
+                            {step.key === 'opinion' && selectedException.handleTime}
+                            {step.key === 'feedback' && selectedException.carrierFeedbackTime}
+                            {step.key === 'resolve' && selectedException.resolveTime}
+                          </div>
+                        )}
+                      </div>
+                      {idx < arr.length - 1 && (
+                        <div className={`flex-1 h-0.5 mt-4.5 ${
+                          step.done ? 'bg-emerald-500/50' : 'bg-dashboard-border'
+                        }`} />
+                      )}
+                    </React.Fragment>
+                  ))}
                 </div>
               </div>
 
@@ -211,80 +279,270 @@ const ExceptionHandling: React.FC = () => {
                 <div className="dashboard-card p-4">
                   <div className="text-xs text-slate-500 mb-2 flex items-center gap-2">
                     <User className="w-3.5 h-3.5" />
-                    <span>已下发处置意见 · {selectedException.handler} · {formatDateTime(selectedException.handleTime!)}</span>
+                    <span>处置意见 · {selectedException.handler} · {formatDateTime(selectedException.handleTime!)}</span>
                   </div>
-                  <div className="text-sm text-slate-200 bg-dashboard-hover p-3 rounded">
+                  <div className="text-sm text-slate-200 bg-primary-500/10 border border-primary-500/20 p-3 rounded">
                     {selectedException.handleOpinion}
+                  </div>
+                </div>
+              )}
+
+              {selectedException.carrierFeedback && (
+                <div className="dashboard-card p-4">
+                  <div className="text-xs text-slate-500 mb-2 flex items-center gap-2">
+                    <FileText className="w-3.5 h-3.5" />
+                    <span>承运方执行结果 · {formatDateTime(selectedException.carrierFeedbackTime!)}</span>
+                  </div>
+                  <div className="text-sm text-slate-200 bg-emerald-500/10 border border-emerald-500/20 p-3 rounded mb-3">
+                    {selectedException.carrierFeedback}
+                  </div>
+                  {(selectedException.carrierPhotos?.length || 0) > 0 ? (
+                    <div className="grid grid-cols-4 gap-2">
+                      {selectedException.carrierPhotos?.map((p, i) => (
+                        <div key={i} className="aspect-video rounded bg-dashboard-hover border border-dashboard-border flex items-center justify-center overflow-hidden">
+                          <Camera className="w-6 h-6 text-slate-500" />
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-xs text-slate-500 flex items-center gap-1.5">
+                      <Camera className="w-3.5 h-3.5" />
+                      暂未上传现场照片
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {selectedException.status === 'resolved' && selectedException.resolver && (
+                <div className="dashboard-card p-4 bg-emerald-500/5 border-emerald-500/30">
+                  <div className="flex items-center gap-2 text-emerald-400">
+                    <CheckCircle className="w-4 h-4" />
+                    <span className="text-sm font-medium">已闭环确认</span>
+                    <span className="text-xs text-slate-400 ml-auto">
+                      {selectedException.resolver} · {formatDateTime(selectedException.resolveTime!)}
+                    </span>
                   </div>
                 </div>
               )}
 
               {selectedException.status !== 'resolved' && (
                 <>
-                  <div>
-                    <div className="text-sm text-slate-400 mb-2">快捷处置意见</div>
-                    <div className="flex flex-wrap gap-2">
-                      {handleOptions.map((opt) => (
-                        <button
-                          key={opt.value}
-                          className={`px-3 py-1.5 rounded text-sm border transition-all duration-200 ${
-                            selectedOpinion === opt.value
-                              ? opt.type === 'danger' ? 'bg-red-500/30 border-red-500 text-red-300' :
-                                opt.type === 'warning' ? 'bg-amber-500/30 border-amber-500 text-amber-300' :
-                                opt.type === 'success' ? 'bg-emerald-500/30 border-emerald-500 text-emerald-300' :
-                                'bg-primary-500/30 border-primary-500 text-primary-300'
-                              : 'bg-dashboard-surface border-dashboard-border text-slate-300 hover:border-primary-500/50'
-                          }`}
-                          onClick={() => {
-                            setSelectedOpinion(opt.value);
-                            setCustomOpinion('');
+                  {!selectedException.handleOpinion && (
+                    <>
+                      <div>
+                        <div className="text-sm text-slate-400 mb-2">快捷处置意见</div>
+                        <div className="flex flex-wrap gap-2">
+                          {handleOptions.map((opt) => (
+                            <button
+                              key={opt.value}
+                              className={`px-3 py-1.5 rounded text-sm border transition-all duration-200 ${
+                                selectedOpinion === opt.value
+                                  ? opt.type === 'danger' ? 'bg-red-500/30 border-red-500 text-red-300' :
+                                    opt.type === 'warning' ? 'bg-amber-500/30 border-amber-500 text-amber-300' :
+                                    opt.type === 'success' ? 'bg-emerald-500/30 border-emerald-500 text-emerald-300' :
+                                    'bg-primary-500/30 border-primary-500 text-primary-300'
+                                  : 'bg-dashboard-surface border-dashboard-border text-slate-300 hover:border-primary-500/50'
+                              }`}
+                              onClick={() => {
+                                setSelectedOpinion(opt.value);
+                                setCustomOpinion('');
+                              }}
+                            >
+                              {opt.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div>
+                        <div className="text-sm text-slate-400 mb-2">或输入自定义意见</div>
+                        <textarea
+                          className="input-field w-full h-24 resize-none"
+                          placeholder="请输入处置意见..."
+                          value={customOpinion}
+                          onChange={(e) => {
+                            setCustomOpinion(e.target.value);
+                            setSelectedOpinion('');
                           }}
-                        >
-                          {opt.label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
+                        />
+                      </div>
 
-                  <div>
-                    <div className="text-sm text-slate-400 mb-2">或输入自定义意见</div>
-                    <textarea
-                      className="input-field w-full h-24 resize-none"
-                      placeholder="请输入处置意见..."
-                      value={customOpinion}
-                      onChange={(e) => {
-                        setCustomOpinion(e.target.value);
-                        setSelectedOpinion('');
-                      }}
-                    />
-                  </div>
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2 text-sm">
+                          <User className="w-4 h-4 text-slate-500" />
+                          <span className="text-slate-400">处置人:</span>
+                          <input
+                            className="input-field py-1 text-sm w-32"
+                            value={handlerName}
+                            onChange={(e) => setHandlerName(e.target.value)}
+                          />
+                        </div>
+                        <div className="flex gap-2">
+                          <button className="btn-secondary" onClick={() => setSelectedException(null)}>
+                            取消
+                          </button>
+                          <button
+                            className="btn-primary"
+                            onClick={handleSubmit}
+                            disabled={!selectedOpinion && !customOpinion}
+                          >
+                            <Send className="w-4 h-4" />
+                            <span>下发处置意见</span>
+                          </button>
+                        </div>
+                      </div>
+                    </>
+                  )}
 
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2 text-sm">
-                      <User className="w-4 h-4 text-slate-500" />
-                      <span className="text-slate-400">处置人:</span>
-                      <input
-                        className="input-field py-1 text-sm w-32"
-                        value={handlerName}
-                        onChange={(e) => setHandlerName(e.target.value)}
-                      />
-                    </div>
-                    <div className="flex gap-2">
+                  {selectedException.handleOpinion && (selectedException.status as string) !== 'resolved' && (
+                    <div className="flex gap-2 justify-end pt-2 border-t border-dashboard-border">
                       <button className="btn-secondary" onClick={() => setSelectedException(null)}>
-                        取消
+                        关闭
                       </button>
                       <button
-                        className="btn-primary"
-                        onClick={handleSubmit}
-                        disabled={!selectedOpinion && !customOpinion}
+                        className="btn-secondary"
+                        onClick={() => {
+                          setCarrierFeedbackText(selectedException.carrierFeedback || '');
+                          setFeedbackModal('carrier');
+                        }}
                       >
-                        <Send className="w-4 h-4" />
-                        <span>下发处置意见</span>
+                        <FileText className="w-4 h-4" />
+                        <span>{selectedException.carrierFeedback ? '修改承运反馈' : '承运方回填'}</span>
                       </button>
+                      {selectedException.carrierFeedback && (
+                        <button
+                          className="btn-primary"
+                          onClick={() => {
+                            setResolverName(selectedException.resolver || handlerName);
+                            setFeedbackModal('resolve');
+                          }}
+                        >
+                          <CheckCircle className="w-4 h-4" />
+                          <span>标记已闭环</span>
+                        </button>
+                      )}
                     </div>
-                  </div>
+                  )}
                 </>
               )}
+
+              {selectedException.status === 'resolved' && (
+                <div className="flex gap-2 justify-end pt-2 border-t border-dashboard-border">
+                  <button className="btn-secondary" onClick={() => setSelectedException(null)}>
+                    关闭
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {feedbackModal === 'carrier' && selectedException && (
+        <div className="fixed inset-0 bg-black/60 z-[60] flex items-center justify-center p-6 animate-fade-in" onClick={() => setFeedbackModal(null)}>
+          <div className="w-full max-w-lg bg-dashboard-surface rounded-lg border border-dashboard-border overflow-hidden animate-slide-up" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-6 py-4 border-b border-dashboard-border">
+              <div className="flex items-center gap-3">
+                <FileText className="w-5 h-5 text-primary-400" />
+                <h2 className="text-lg font-semibold text-white">承运方回填执行结果</h2>
+              </div>
+              <button
+                className="p-2 rounded-md hover:bg-dashboard-hover text-slate-400 hover:text-white transition-colors"
+                onClick={() => setFeedbackModal(null)}
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-6 space-y-4">
+              <div className="text-sm text-slate-400">
+                车辆 <span className="text-white">{selectedException.plateNumber}</span> · {getExceptionTypeText(selectedException.type)}
+              </div>
+              <div>
+                <div className="text-sm text-slate-400 mb-2">执行结果描述</div>
+                <textarea
+                  className="input-field w-full h-32 resize-none"
+                  placeholder="请描述处置措施、现场情况、复测温度等执行结果..."
+                  value={carrierFeedbackText}
+                  onChange={(e) => setCarrierFeedbackText(e.target.value)}
+                />
+              </div>
+              <div>
+                <div className="text-sm text-slate-400 mb-2">现场照片（占位）</div>
+                <div className="grid grid-cols-4 gap-2">
+                  {[0, 1, 2, 3].map((i) => (
+                    <div
+                      key={i}
+                      className="aspect-video rounded bg-dashboard-hover border border-dashed border-dashboard-border flex flex-col items-center justify-center text-slate-500 hover:border-primary-500/50 hover:text-primary-400 cursor-pointer transition-colors"
+                    >
+                      <Camera className="w-6 h-6 mb-1" />
+                      <span className="text-[10px]">添加照片</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div className="flex gap-2 justify-end pt-2">
+                <button className="btn-secondary" onClick={() => setFeedbackModal(null)}>取消</button>
+                <button
+                  className="btn-primary"
+                  onClick={handleCarrierFeedbackSubmit}
+                  disabled={!carrierFeedbackText.trim()}
+                >
+                  <Send className="w-4 h-4" />
+                  <span>提交反馈</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {feedbackModal === 'resolve' && selectedException && (
+        <div className="fixed inset-0 bg-black/60 z-[60] flex items-center justify-center p-6 animate-fade-in" onClick={() => setFeedbackModal(null)}>
+          <div className="w-full max-w-md bg-dashboard-surface rounded-lg border border-dashboard-border overflow-hidden animate-slide-up" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-6 py-4 border-b border-dashboard-border">
+              <div className="flex items-center gap-3">
+                <CheckCircle className="w-5 h-5 text-emerald-400" />
+                <h2 className="text-lg font-semibold text-white">确认闭环</h2>
+              </div>
+              <button
+                className="p-2 rounded-md hover:bg-dashboard-hover text-slate-400 hover:text-white transition-colors"
+                onClick={() => setFeedbackModal(null)}
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-6 space-y-4">
+              <div className="dashboard-card p-3 bg-emerald-500/5 border-emerald-500/20">
+                <div className="text-sm text-slate-300 mb-1">
+                  即将标记以下异常为已闭环：
+                </div>
+                <div className="text-white font-medium">
+                  {selectedException.plateNumber} · {getExceptionTypeText(selectedException.type)}
+                </div>
+              </div>
+              <div>
+                <div className="text-sm text-slate-400 mb-2 flex items-center gap-1.5">
+                  <User className="w-4 h-4" />
+                  闭环确认人
+                </div>
+                <input
+                  className="input-field w-full"
+                  placeholder="请输入确认人姓名"
+                  value={resolverName}
+                  onChange={(e) => setResolverName(e.target.value)}
+                />
+              </div>
+              <div className="flex gap-2 justify-end pt-2">
+                <button className="btn-secondary" onClick={() => setFeedbackModal(null)}>取消</button>
+                <button
+                  className="btn-primary"
+                  onClick={handleResolveSubmit}
+                  disabled={!resolverName.trim()}
+                >
+                  <ShieldCheck className="w-4 h-4" />
+                  <span>确认闭环</span>
+                </button>
+              </div>
             </div>
           </div>
         </div>

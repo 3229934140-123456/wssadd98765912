@@ -73,7 +73,7 @@ export const getExceptionStatusText = (status: string): string => {
   const map: Record<string, string> = {
     pending: '待处理',
     handling: '处理中',
-    resolved: '已解决',
+    resolved: '已闭环',
   };
   return map[status] || status;
 };

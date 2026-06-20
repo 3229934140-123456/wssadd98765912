@@ -8,9 +8,10 @@ import RiskBadge from '@/components/RiskBadge';
 import { useBatchStore } from '@/store/batchStore';
 import { useExceptionStore } from '@/store/exceptionStore';
 import { useVehicleStore } from '@/store/vehicleStore';
+import { useJurisdictionStore } from '@/store/jurisdictionStore';
 import { vaccineNames, batchStatusOptions } from '@/mock/batches';
 import { getBatchStatusText, formatTemperature, formatDateTime, getExceptionTypeText, getExceptionStatusText, getVehicleStatusText, formatRelativeTime } from '@/utils/format';
-import type { VaccineBatch, ExceptionEvent } from '@/types';
+import type { VaccineBatch, ExceptionEvent, CountyDistrict } from '@/types';
 
 const BatchArchives: React.FC = () => {
   const {
@@ -77,6 +78,9 @@ const BatchArchives: React.FC = () => {
   const handleExportSummaryReport = () => {
     if (!hasSelected) return;
     const selectedBatches = batches.filter((b) => selectedBatchIds.includes(b.id));
+    const { level, county } = useJurisdictionStore.getState();
+    const districtName = level === 'county' && county ? county : '全市';
+
     const allRelatedExceptions: ExceptionEvent[] = [];
     const allRelatedVehicles = new Set<string>();
     let totalQuantity = 0;
@@ -84,59 +88,191 @@ const BatchArchives: React.FC = () => {
     let unresolvedCount = 0;
     const vaccineTypes = new Set<string>();
 
+    interface VaccineSummary {
+      vaccineName: string;
+      batchCount: number;
+      quantity: number;
+      riskBatchCount: number;
+      exceptionCount: number;
+      unresolvedExceptionCount: number;
+      vehicleIds: Set<string>;
+    }
+    const vaccineSummaryMap = new Map<string, VaccineSummary>();
+
+    interface DistrictSummary {
+      district: CountyDistrict | string;
+      batchCount: number;
+      quantity: number;
+      riskBatchCount: number;
+      exceptionCount: number;
+      unresolvedExceptionCount: number;
+      vehicleIds: Set<string>;
+    }
+    const districtSummaryMap = new Map<string, DistrictSummary>();
+
     selectedBatches.forEach((b) => {
       totalQuantity += b.quantity;
       vaccineTypes.add(b.vaccineName);
+
       const relatedEx = exceptions.filter((e) => {
         const vehicle = vehicles.find((v: any) => v.id === e.vehicleId);
         return vehicle && vehicle.batchNumbers.includes(b.batchNumber);
       });
+
+      const relatedVehicleIds = new Set<string>();
+      let batchHasRisk = false;
+
       relatedEx.forEach((ex) => {
         if (!allRelatedExceptions.find((e) => e.id === ex.id)) {
           allRelatedExceptions.push(ex);
         }
         if (ex.status !== 'resolved') unresolvedCount++;
         totalExceptionCount++;
-        if (ex.vehicleId) allRelatedVehicles.add(ex.vehicleId);
+        if (ex.vehicleId) {
+          allRelatedVehicles.add(ex.vehicleId);
+          relatedVehicleIds.add(ex.vehicleId);
+        }
+        if (ex.level === 'high' || ex.level === 'medium') batchHasRisk = true;
+      });
+
+      if (b.status === 'warning' || relatedEx.some((e) => e.status !== 'resolved')) {
+        batchHasRisk = true;
+      }
+
+      if (!vaccineSummaryMap.has(b.vaccineName)) {
+        vaccineSummaryMap.set(b.vaccineName, {
+          vaccineName: b.vaccineName,
+          batchCount: 0,
+          quantity: 0,
+          riskBatchCount: 0,
+          exceptionCount: 0,
+          unresolvedExceptionCount: 0,
+          vehicleIds: new Set(),
+        });
+      }
+      const vs = vaccineSummaryMap.get(b.vaccineName)!;
+      vs.batchCount++;
+      vs.quantity += b.quantity;
+      if (batchHasRisk) vs.riskBatchCount++;
+      vs.exceptionCount += relatedEx.length;
+      vs.unresolvedExceptionCount += relatedEx.filter((e) => e.status !== 'resolved').length;
+      relatedVehicleIds.forEach((vid) => vs.vehicleIds.add(vid));
+
+      const batchDistricts = new Set<string>();
+      vehicles.forEach((v: any) => {
+        if (v.batchNumbers.includes(b.batchNumber)) {
+          batchDistricts.add(v.district);
+        }
+      });
+      batchDistricts.forEach((d) => {
+        if (!districtSummaryMap.has(d)) {
+          districtSummaryMap.set(d, {
+            district: d,
+            batchCount: 0,
+            quantity: 0,
+            riskBatchCount: 0,
+            exceptionCount: 0,
+            unresolvedExceptionCount: 0,
+            vehicleIds: new Set(),
+          });
+        }
+        const ds = districtSummaryMap.get(d)!;
+        ds.batchCount++;
+        ds.quantity += b.quantity;
+        if (batchHasRisk) ds.riskBatchCount++;
+        ds.exceptionCount += relatedEx.length;
+        ds.unresolvedExceptionCount += relatedEx.filter((e) => e.status !== 'resolved').length;
+        relatedVehicleIds.forEach((vid) => ds.vehicleIds.add(vid));
       });
     });
 
-    const district = useBatchStore.getState().batches.length > 0 ? '' : '';
-
     const lines: string[] = [];
     lines.push('═══════════════════════════════════════════════════════════════');
-    lines.push('               疫苗冷链月度检查汇总报告');
+    lines.push('         疫 苗 冷 链 月 度 检 查 汇 总 报 告');
     lines.push('═══════════════════════════════════════════════════════════════');
     lines.push('');
-    lines.push(`报告生成时间: ${new Date().toLocaleString('zh-CN')}`);
-    lines.push(`检查周期: ${new Date().toISOString().slice(0, 7)} 月度检查`);
-    lines.push(`辖区范围: ${district || '全市辖区'}`);
+    lines.push(`【报告标识】`);
+    lines.push(`  报告生成时间: ${new Date().toLocaleString('zh-CN')}`);
+    lines.push(`  检查周期: ${new Date().toISOString().slice(0, 7)} 月度检查`);
+    lines.push(`  上报辖区: ${districtName}`);
+    lines.push(`  报告编号: JL-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${String(Math.floor(Math.random() * 9000) + 1000)}`);
     lines.push('');
-    lines.push('【一、检查概要】');
+    lines.push('═══════════════════════════════════════════════════════════════');
+    lines.push('                    一、检 查 概 要');
+    lines.push('═══════════════════════════════════════════════════════════════');
+    lines.push('');
     lines.push(`  本次检查批次数量: ${selectedBatches.length} 批`);
     lines.push(`  涉及疫苗品类: ${Array.from(vaccineTypes).join('、')}`);
-    lines.push(`  批次总数量: ${totalQuantity.toLocaleString()} 剂`);
+    lines.push(`  批次总剂数: ${totalQuantity.toLocaleString()} 剂`);
+    lines.push(`  风险批次数量: ${selectedBatches.filter((b) => {
+      const relatedEx = exceptions.filter((e) => {
+        const vehicle = vehicles.find((v: any) => v.id === e.vehicleId);
+        return vehicle && vehicle.batchNumbers.includes(b.batchNumber);
+      });
+      return b.status === 'warning' || relatedEx.some((e) => e.status !== 'resolved');
+    }).length} 批`);
     lines.push(`  关联异常事件: ${totalExceptionCount} 起`);
-    lines.push(`  待处置异常: ${unresolvedCount} 起`);
+    lines.push(`  未闭环异常: ${unresolvedCount} 起`);
     lines.push(`  涉及运输车辆: ${allRelatedVehicles.size} 辆`);
     lines.push('');
-    lines.push('【二、批次状态分布】');
-    lines.push(`  正常批次: ${selectedBatches.filter((b) => b.status === 'normal').length} 批`);
-    lines.push(`  预警批次: ${selectedBatches.filter((b) => b.status === 'warning').length} 批`);
-    lines.push(`  召回批次: ${selectedBatches.filter((b) => b.status === 'recalled').length} 批`);
+    lines.push('═══════════════════════════════════════════════════════════════');
+    lines.push('                  二、按 辖 区 汇 总');
+    lines.push('═══════════════════════════════════════════════════════════════');
     lines.push('');
-    lines.push('【三、异常事件汇总】');
+    if (districtSummaryMap.size === 0) {
+      lines.push('  无辖区数据。');
+    } else {
+      lines.push('  ┌──────────┬────────┬──────────┬────────┬────────┬────────┬────────┐');
+      lines.push('  │ 辖区     │ 批次数 │ 剂数     │ 风险批 │ 异常数 │ 未闭环 │ 车辆数 │');
+      lines.push('  ├──────────┼────────┼──────────┼────────┼────────┼────────┼────────┤');
+      Array.from(districtSummaryMap.values()).forEach((ds) => {
+        const dName = String(ds.district).padEnd(6, ' ');
+        lines.push(`  │ ${dName} │ ${String(ds.batchCount).padStart(6)} │ ${String(ds.quantity.toLocaleString()).padStart(8)} │ ${String(ds.riskBatchCount).padStart(6)} │ ${String(ds.exceptionCount).padStart(6)} │ ${String(ds.unresolvedExceptionCount).padStart(6)} │ ${String(ds.vehicleIds.size).padStart(6)} │`);
+      });
+      lines.push('  └──────────┴────────┴──────────┴────────┴────────┴────────┴────────┘');
+    }
+    lines.push('');
+    lines.push('═══════════════════════════════════════════════════════════════');
+    lines.push('                三、按 疫 苗 品 类 汇 总');
+    lines.push('═══════════════════════════════════════════════════════════════');
+    lines.push('');
+    if (vaccineSummaryMap.size === 0) {
+      lines.push('  无疫苗品类数据。');
+    } else {
+      lines.push('  ┌──────────────────┬────────┬──────────┬────────┬────────┬────────┬────────┐');
+      lines.push('  │ 疫苗品类         │ 批次数 │ 剂数     │ 风险批 │ 异常数 │ 未闭环 │ 车辆数 │');
+      lines.push('  ├──────────────────┼────────┼──────────┼────────┼────────┼────────┼────────┤');
+      Array.from(vaccineSummaryMap.values()).forEach((vs) => {
+        const vName = vs.vaccineName.padEnd(14, ' ');
+        lines.push(`  │ ${vName} │ ${String(vs.batchCount).padStart(6)} │ ${String(vs.quantity.toLocaleString()).padStart(8)} │ ${String(vs.riskBatchCount).padStart(6)} │ ${String(vs.exceptionCount).padStart(6)} │ ${String(vs.unresolvedExceptionCount).padStart(6)} │ ${String(vs.vehicleIds.size).padStart(6)} │`);
+      });
+      lines.push('  └──────────────────┴────────┴──────────┴────────┴────────┴────────┴────────┘');
+    }
+    lines.push('');
+    lines.push('═══════════════════════════════════════════════════════════════');
+    lines.push('                  四、异 常 事 件 汇 总');
+    lines.push('═══════════════════════════════════════════════════════════════');
+    lines.push('');
     if (allRelatedExceptions.length === 0) {
       lines.push('  本次检查范围内无异常事件，冷链管理情况良好。');
     } else {
       const highCount = allRelatedExceptions.filter((e) => e.level === 'high').length;
       const mediumCount = allRelatedExceptions.filter((e) => e.level === 'medium').length;
       const lowCount = allRelatedExceptions.filter((e) => e.level === 'low').length;
-      lines.push(`  高风险异常: ${highCount} 起`);
-      lines.push(`  中风险异常: ${mediumCount} 起`);
-      lines.push(`  低风险异常: ${lowCount} 起`);
+      const resolvedCount = allRelatedExceptions.filter((e) => e.status === 'resolved').length;
+      const pendingCount = allRelatedExceptions.filter((e) => e.status === 'pending').length;
+      const handlingCount = allRelatedExceptions.filter((e) => e.status === 'handling').length;
+      lines.push('  【风险等级分布】');
+      lines.push(`    高风险异常: ${highCount} 起`);
+      lines.push(`    中风险异常: ${mediumCount} 起`);
+      lines.push(`    低风险异常: ${lowCount} 起`);
       lines.push('');
-      lines.push('  异常类型统计:');
+      lines.push('  【处置状态分布】');
+      lines.push(`    待处置: ${pendingCount} 起`);
+      lines.push(`    处理中: ${handlingCount} 起`);
+      lines.push(`    已闭环: ${resolvedCount} 起`);
+      lines.push('');
+      lines.push('  【异常类型统计】');
       const typeMap: Record<string, number> = {};
       allRelatedExceptions.forEach((ex) => {
         typeMap[getExceptionTypeText(ex.type)] = (typeMap[getExceptionTypeText(ex.type)] || 0) + 1;
@@ -145,30 +281,62 @@ const BatchArchives: React.FC = () => {
         lines.push(`    ${type}: ${count} 起`);
       });
       lines.push('');
-      lines.push('  处置意见汇总:');
+      lines.push('  【未闭环异常清单】');
+      const unresolvedEx = allRelatedExceptions.filter((e) => e.status !== 'resolved');
+      if (unresolvedEx.length === 0) {
+        lines.push('    所有异常均已闭环。');
+      } else {
+        unresolvedEx.forEach((ex, i) => {
+          lines.push(`    ${i + 1}. [${ex.level === 'high' ? '高' : ex.level === 'medium' ? '中' : '低'}风险] ${getExceptionTypeText(ex.type)} - ${ex.plateNumber}`);
+          lines.push(`       描述: ${ex.description}`);
+          if (ex.handleOpinion) {
+            lines.push(`       处置意见: ${ex.handleOpinion} (${ex.handler} · ${ex.handleTime})`);
+          }
+          if (ex.carrierFeedback) {
+            lines.push(`       承运反馈: ${ex.carrierFeedback} (${ex.carrierFeedbackTime})`);
+          }
+          lines.push(`       当前状态: ${getExceptionStatusText(ex.status)}`);
+        });
+      }
+      lines.push('');
+      lines.push('  【处置意见汇总】');
       allRelatedExceptions
         .filter((e) => e.handleOpinion)
         .forEach((ex, i) => {
           lines.push(`    ${i + 1}. [${getExceptionTypeText(ex.type)}] ${ex.plateNumber}`);
           lines.push(`       处置意见: ${ex.handleOpinion}`);
           lines.push(`       处置人: ${ex.handler} · ${ex.handleTime}`);
+          if (ex.carrierFeedback) {
+            lines.push(`       承运方反馈: ${ex.carrierFeedback} (${ex.carrierFeedbackTime})`);
+          }
+          if (ex.status === 'resolved') {
+            lines.push(`       闭环确认: ${ex.resolver} · ${ex.resolveTime}`);
+          }
         });
     }
     lines.push('');
-    lines.push('【四、涉及车辆状态汇总】');
+    lines.push('═══════════════════════════════════════════════════════════════');
+    lines.push('                五、涉 及 车 辆 状 态 汇 总');
+    lines.push('═══════════════════════════════════════════════════════════════');
+    lines.push('');
     if (allRelatedVehicles.size === 0) {
       lines.push('  无涉及车辆。');
     } else {
       const vList = vehicles.filter((v: any) => allRelatedVehicles.has(v.id));
       vList.forEach((v: any, i) => {
         const isAbnormal = v.currentTemp > 8 || v.currentTemp < 2;
+        const vExceptions = allRelatedExceptions.filter((e) => e.vehicleId === v.id);
         lines.push(`  ${i + 1}. ${v.plateNumber} (${v.carrier})`);
-        lines.push(`     司机: ${v.driver} · 线路: ${v.route}`);
-        lines.push(`     状态: ${getVehicleStatusText(v.status)} · 当前温度: ${formatTemperature(v.currentTemp)}${isAbnormal ? ' (温度异常)' : ''}`);
+        lines.push(`     司机: ${v.driver} · 联系电话: ${v.phone}`);
+        lines.push(`     所属辖区: ${v.district} · 线路: ${v.route}`);
+        lines.push(`     状态: ${getVehicleStatusText(v.status)} · 当前温度: ${formatTemperature(v.currentTemp)}${isAbnormal ? ' (温度异常!)' : ''}`);
+        lines.push(`     关联异常: ${vExceptions.length} 起 (未闭环 ${vExceptions.filter((e) => e.status !== 'resolved').length} 起)`);
       });
     }
     lines.push('');
-    lines.push('【五、各批次详情】');
+    lines.push('═══════════════════════════════════════════════════════════════');
+    lines.push('                    六、各 批 次 详 情');
+    lines.push('═══════════════════════════════════════════════════════════════');
     selectedBatches.forEach((batch, idx) => {
       const relatedEx = exceptions.filter((e) => {
         const vehicle = vehicles.find((v: any) => v.id === e.vehicleId);
@@ -179,28 +347,37 @@ const BatchArchives: React.FC = () => {
       const avgTemp = batch.temperatureRecords.reduce((sum, r) => sum + r.temp, 0) / (batch.temperatureRecords.length || 1);
       const maxTemp = Math.max(...batch.temperatureRecords.map((r) => r.temp));
       const minTemp = Math.min(...batch.temperatureRecords.map((r) => r.temp));
+      const unresolvedEx = relatedEx.filter((e) => e.status !== 'resolved').length;
 
       lines.push('');
-      lines.push(`  ${idx + 1}. ${batch.batchNumber} (${batch.vaccineName})`);
-      lines.push(`     厂家: ${batch.manufacturer} · 数量: ${batch.quantity.toLocaleString()} 剂`);
-      lines.push(`     状态: ${getBatchStatusText(batch.status)} · 温度状态: ${hasAbnormal ? '存在异常' : '全程正常'}`);
-      lines.push(`     温度统计: 平均 ${avgTemp.toFixed(1)}°C · 最高 ${maxTemp.toFixed(1)}°C · 最低 ${minTemp.toFixed(1)}°C`);
-      lines.push(`     关联异常: ${relatedEx.length} 起 · 涉及车辆: ${relatedVs.length} 辆`);
+      lines.push(`  【批次 ${idx + 1}】 ${batch.batchNumber}`);
+      lines.push(`    疫苗名称: ${batch.vaccineName}`);
+      lines.push(`    生产厂家: ${batch.manufacturer} · 数量: ${batch.quantity.toLocaleString()} 剂`);
+      lines.push(`    生产日期: ${batch.productionDate} · 有效期至: ${batch.expiryDate}`);
+      lines.push(`    批次状态: ${getBatchStatusText(batch.status)}`);
+      lines.push(`    温度统计: 平均 ${avgTemp.toFixed(1)}°C · 最高 ${maxTemp.toFixed(1)}°C · 最低 ${minTemp.toFixed(1)}°C · ${hasAbnormal ? '存在异常' : '全程正常'}`);
+      lines.push(`    关联异常: ${relatedEx.length} 起 (未闭环 ${unresolvedEx} 起) · 涉及车辆: ${relatedVs.length} 辆`);
       if (relatedEx.length > 0) {
+        lines.push('    异常明细:');
         relatedEx.forEach((ex, j) => {
-          lines.push(`       [${j + 1}] ${getExceptionTypeText(ex.type)} (${getExceptionStatusText(ex.status)})`);
+          lines.push(`      ${j + 1}. [${ex.level === 'high' ? '高' : ex.level === 'medium' ? '中' : '低'}] ${getExceptionTypeText(ex.type)} (${getExceptionStatusText(ex.status)}) - ${ex.plateNumber}`);
+          lines.push(`         ${ex.description}`);
           if (ex.handleOpinion) {
-            lines.push(`           处置: ${ex.handleOpinion}`);
+            lines.push(`         处置: ${ex.handleOpinion}`);
+          }
+          if (ex.status === 'resolved') {
+            lines.push(`         闭环: ${ex.resolver} · ${ex.resolveTime}`);
           }
         });
       }
     });
     lines.push('');
     lines.push('═══════════════════════════════════════════════════════════════');
+    lines.push(`  上报单位: ${districtName}疾控中心冷链监管科`);
     lines.push('  本报告由疾控中心冷链监管系统自动生成');
     lines.push('═══════════════════════════════════════════════════════════════');
 
-    downloadReport(lines.join('\n'), `月度检查汇总报告_${selectedBatches.length}批_${new Date().toISOString().slice(0, 10)}.txt`);
+    downloadReport(lines.join('\n'), `月度检查汇总报告_${districtName}_${selectedBatches.length}批_${new Date().toISOString().slice(0, 10)}.txt`);
   };
 
   return (

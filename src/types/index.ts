@@ -53,6 +53,11 @@ export interface ExceptionEvent {
   location?: string;
   carrier?: string;
   vaccineType?: string;
+  carrierFeedback?: string;
+  carrierFeedbackTime?: string;
+  carrierPhotos?: string[];
+  resolveTime?: string;
+  resolver?: string;
 }
 
 export interface TemperatureRecord {

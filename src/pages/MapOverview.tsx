@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Truck, Thermometer, AlertTriangle, CheckCircle, Route, Filter, RotateCcw, User, Phone, ChevronRight, X, Maximize2, MapPin, Clock, Crosshair, MessageSquare, Shield } from 'lucide-react';
+import { Truck, Thermometer, AlertTriangle, CheckCircle, Route, Filter, RotateCcw, User, Phone, ChevronRight, X, Maximize2, MapPin, Clock, Crosshair, MessageSquare, Shield, Package, FileImage, Send, CheckCheck, FileText } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import StatsCard from '@/components/StatsCard';
 import MapView from '@/components/MapView';
@@ -30,25 +30,35 @@ const MapOverview: React.FC = () => {
     getFilteredVehicles,
     getTrackPointsByVehicleId,
     getVehicleStats,
+    vehicles: allVehicles,
   } = useVehicleStore();
 
-  const { getBatchesByVehicleId } = useBatchStore();
-  const { exceptions, locateVehicleId, setLocateVehicleId } = useExceptionStore();
+  const { getBatchesByVehicleId, getBatchesByBatchNumber, setSelectedBatch } = useBatchStore();
+  const { exceptions, locateVehicleId, setLocateVehicleId, setSelectedException, addCarrierFeedback, resolveException } = useExceptionStore();
 
   const [showDetailModal, setShowDetailModal] = useState(false);
+  const [resolveModalOpen, setResolveModalOpen] = useState(false);
+  const [feedbackModalOpen, setFeedbackModalOpen] = useState(false);
+  const [feedbackText, setFeedbackText] = useState('');
+  const [resolveName, setResolveName] = useState('市级管理员');
+  const [activeView, setActiveView] = useState<'summary' | 'timeline'>('summary');
   const { level: jurisdictionLevel, county: countyDistrict } = useJurisdictionStore();
 
   const stats = getVehicleStats();
   const filteredVehicles = getFilteredVehicles();
-  const selectedVehicle = filteredVehicles.find((v) => v.id === selectedVehicleId);
+  const selectedVehicle = allVehicles.find((v) => v.id === selectedVehicleId);
   const trackPoints = selectedVehicle ? getTrackPointsByVehicleId(selectedVehicleId!) : [];
   const relatedBatches = selectedVehicle ? getBatchesByVehicleId(selectedVehicle.id, selectedVehicle.batchNumbers) : [];
   const activeException = activeExceptionId ? exceptions.find((e) => e.id === activeExceptionId) : null;
 
-  const filteredTrackPoints = useMemo(() => {
-    if (!activeException) return trackPoints;
-    return trackPoints;
-  }, [trackPoints, activeException]);
+  const isReviewMode = !!activeException;
+
+  const mapVehicles = useMemo(() => {
+    if (isReviewMode && selectedVehicle) {
+      return [selectedVehicle];
+    }
+    return filteredVehicles;
+  }, [isReviewMode, selectedVehicle, filteredVehicles]);
 
   const highlightPointIds = useMemo(() => {
     if (highlightTrackSegment && highlightTrackSegment.vehicleId === selectedVehicleId) {
@@ -60,38 +70,111 @@ const MapOverview: React.FC = () => {
     return [];
   }, [highlightTrackSegment, selectedVehicleId, activeException, trackPoints]);
 
-  const mapEventPoints = useMemo(() => {
-    if (!activeException) return trackPoints;
+  const mapTrackPoints = useMemo(() => {
+    if (!isReviewMode) return trackPoints;
     return trackPoints.filter((p) => highlightPointIds.includes(p.id));
-  }, [trackPoints, activeException, highlightPointIds]);
+  }, [trackPoints, isReviewMode, highlightPointIds]);
 
   const vehicleExceptions = selectedVehicle
     ? exceptions.filter((e) => e.vehicleId === selectedVehicle.id)
     : [];
 
+  const reviewTimelineItems = useMemo(() => {
+    if (!activeException) return [];
+    const exTime = new Date(activeException.timestamp).getTime();
+    const timeRange = 45 * 60 * 1000;
+    const relevantTps = trackPoints.filter((tp) => {
+      const tpTime = new Date(tp.timestamp).getTime();
+      return Math.abs(tpTime - exTime) <= timeRange || highlightPointIds.includes(tp.id);
+    }).sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+
+    const items: TimelineItem[] = relevantTps.map((tp) => ({
+      type: tp.eventType,
+      title: getEventTypeText(tp.eventType),
+      time: tp.timestamp,
+      description: tp.eventDesc,
+      temp: tp.temp,
+    }));
+
+    if (activeException.handleOpinion) {
+      items.push({
+        type: 'station',
+        title: `监管员 ${activeException.handler} 下发处置意见`,
+        time: activeException.handleTime || '',
+        description: activeException.handleOpinion,
+      });
+    }
+
+    if (activeException.carrierFeedback) {
+      items.push({
+        type: 'station',
+        title: `承运方回填执行结果`,
+        time: activeException.carrierFeedbackTime || '',
+        description: activeException.carrierFeedback,
+      });
+    }
+
+    if (activeException.status === 'resolved') {
+      items.push({
+        type: 'warehouse',
+        title: `${activeException.resolver || '监管员'} 闭环确认`,
+        time: activeException.resolveTime || '',
+        description: '该异常已完成闭环处理',
+      });
+    }
+
+    return items;
+  }, [activeException, trackPoints, highlightPointIds]);
+
+  const reviewTempRecords = useMemo(() => {
+    if (!activeException) return [];
+    const exTime = new Date(activeException.timestamp).getTime();
+    const timeRange = 45 * 60 * 1000;
+    return trackPoints
+      .filter((tp) => {
+        const tpTime = new Date(tp.timestamp).getTime();
+        return Math.abs(tpTime - exTime) <= timeRange || highlightPointIds.includes(tp.id);
+      })
+      .map((tp) => ({ timestamp: tp.timestamp, temp: tp.temp }));
+  }, [activeException, trackPoints, highlightPointIds]);
+
   useEffect(() => {
-    const { locateVehicleId, setLocateVehicleId } = useExceptionStore.getState();
-    if (locateVehicleId) {
-      setSelectedVehicle(locateVehicleId);
-      const vehicle = useVehicleStore.getState().vehicles.find((v) => v.id === locateVehicleId);
+    const { locateExceptionId, setLocateExceptionId } = (useExceptionStore.getState() as any);
+    if (locateExceptionId) {
+      const ex = exceptions.find((e) => e.id === locateExceptionId) || useExceptionStore.getState().exceptions.find((e) => e.id === locateExceptionId);
+      if (ex) {
+        setSelectedVehicle(ex.vehicleId);
+        setActiveExceptionId(ex.id);
+        const tps = useVehicleStore.getState().trackPoints[ex.vehicleId] || [];
+        const relevantIds = getRelevantPointIdsForException(ex, tps);
+        setHighlightTrackSegment({ vehicleId: ex.vehicleId, pointIds: relevantIds });
+        (useExceptionStore.getState() as any).setLocateExceptionId?.(null);
+      }
+    }
+
+    const state = useExceptionStore.getState();
+    if ((state as any).locateVehicleId) {
+      const lid = (state as any).locateVehicleId;
+      setSelectedVehicle(lid);
+      const vehicle = useVehicleStore.getState().vehicles.find((v) => v.id === lid);
       if (vehicle) {
-        const tps = useVehicleStore.getState().trackPoints[locateVehicleId] || [];
-        const recentEx = exceptions
-          .filter((e) => e.vehicleId === locateVehicleId)
+        const tps = useVehicleStore.getState().trackPoints[lid] || [];
+        const recentEx = useExceptionStore.getState().exceptions
+          .filter((e) => e.vehicleId === lid)
           .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())[0];
         if (recentEx) {
           setActiveExceptionId(recentEx.id);
           const relevantIds = getRelevantPointIdsForException(recentEx, tps);
-          setHighlightTrackSegment({ vehicleId: locateVehicleId, pointIds: relevantIds });
+          setHighlightTrackSegment({ vehicleId: lid, pointIds: relevantIds });
         }
       }
-      setLocateVehicleId(null);
+      useExceptionStore.setState({ locateVehicleId: null });
     }
   }, []);
 
   const jurisdictionLabel = jurisdictionLevel === 'city' ? '市级' : `县级·${countyDistrict || '未选择'}`;
 
-  const timelineItems: TimelineItem[] = filteredTrackPoints.map((tp) => ({
+  const timelineItems: TimelineItem[] = trackPoints.map((tp) => ({
     type: tp.eventType,
     title: getEventTypeText(tp.eventType),
     time: tp.timestamp,
@@ -107,6 +190,28 @@ const MapOverview: React.FC = () => {
   const handleClearActiveException = () => {
     setActiveExceptionId(null);
     setHighlightTrackSegment(null);
+    setActiveView('summary');
+  };
+
+  const handleFeedbackSubmit = () => {
+    if (!activeException || !feedbackText.trim()) return;
+    addCarrierFeedback(activeException.id, feedbackText.trim());
+    setFeedbackText('');
+    setFeedbackModalOpen(false);
+  };
+
+  const handleResolveSubmit = () => {
+    if (!activeException) return;
+    resolveException(activeException.id, resolveName || '监管员');
+    setResolveModalOpen(false);
+  };
+
+  const handleJumpToBatch = (batchNumber: string) => {
+    const batch = getBatchesByBatchNumber(batchNumber);
+    if (batch) {
+      setSelectedBatch(batch.id);
+      navigate('/batch-archives');
+    }
   };
 
   return (
@@ -176,6 +281,12 @@ const MapOverview: React.FC = () => {
             <option key={v.value} value={v.value}>{v.label}</option>
           ))}
         </select>
+        {isReviewMode && (
+          <div className="ml-2 px-3 py-1.5 rounded bg-red-500/10 border border-red-500/30 text-xs text-red-300 flex items-center gap-1.5 animate-pulse">
+            <Shield className="w-3.5 h-3.5" />
+            复盘模式 · 地图仅显示{activeException && `${getExceptionTypeText(activeException.type)}相关路段`}
+          </div>
+        )}
         <button className="btn-secondary ml-auto text-sm" onClick={resetFilters}>
           <RotateCcw className="w-4 h-4" />
           <span>重置</span>
@@ -185,20 +296,21 @@ const MapOverview: React.FC = () => {
       <div className="flex-1 flex gap-4 min-h-0">
         <div className="flex-1 min-h-[400px]">
           <MapView
-            vehicles={filteredVehicles}
+            vehicles={mapVehicles}
             selectedVehicleId={selectedVehicleId}
-            trackPoints={activeException ? mapEventPoints : trackPoints}
+            trackPoints={mapTrackPoints}
             highlightPointIds={highlightPointIds}
             onVehicleClick={(id) => {
               setSelectedVehicle(id === selectedVehicleId ? null : id);
               setHighlightTrackSegment(null);
               setActiveExceptionId(null);
+              setActiveView('summary');
             }}
           />
         </div>
 
         <div className="w-80 flex flex-col gap-3 overflow-hidden">
-          {activeException && selectedVehicle && (
+          {isReviewMode && selectedVehicle && activeException && (
             <div className="dashboard-card border-red-500/40 animate-slide-up flex flex-col overflow-hidden flex-shrink-0">
               <div className="p-3 border-b border-dashboard-border flex-shrink-0 bg-red-500/5">
                 <div className="flex items-center justify-between mb-2">
@@ -207,10 +319,6 @@ const MapOverview: React.FC = () => {
                     <span className="text-sm font-semibold text-white">异常复盘 · {getExceptionTypeText(activeException.type)}</span>
                   </div>
                   <RiskBadge level={activeException.level} />
-                </div>
-                <div className="text-xs text-amber-300 mb-2 flex items-center gap-1.5">
-                  <Crosshair className="w-3 h-3" />
-                  地图仅显示本次异常相关路段
                 </div>
                 <div className="grid grid-cols-2 gap-2 text-xs">
                   <div className="flex items-center gap-1.5 text-slate-400">
@@ -242,31 +350,176 @@ const MapOverview: React.FC = () => {
                 </div>
               </div>
 
-              <div className="p-3 border-b border-dashboard-border">
-                <p className="text-xs text-slate-300 mb-2">{activeException.description}</p>
-                {activeException.handleOpinion ? (
-                  <div className="bg-dashboard-surface rounded p-2">
-                    <div className="text-xs text-slate-500 flex items-center gap-1 mb-1">
-                      <MessageSquare className="w-3 h-3" />
-                      最新处置意见 · {activeException.handler} · {formatDateTime(activeException.handleTime!)}
-                    </div>
-                    <div className="text-xs text-primary-300">{activeException.handleOpinion}</div>
-                  </div>
-                ) : (
-                  <button
-                    className="btn-primary w-full text-xs justify-center"
-                    onClick={() => {
-                      useExceptionStore.getState().setSelectedException(activeException.id);
-                      navigate('/exception-handling');
-                    }}
-                  >
-                    <MessageSquare className="w-3.5 h-3.5" />
-                    <span>去下发处置意见</span>
-                  </button>
-                )}
+              <div className="flex border-b border-dashboard-border">
+                <button
+                  className={`flex-1 px-3 py-2 text-xs font-medium transition-colors ${
+                    activeView === 'summary'
+                      ? 'text-primary-400 border-b-2 border-primary-400 bg-primary-500/10'
+                      : 'text-slate-400 hover:text-white hover:bg-dashboard-hover'
+                  }`}
+                  onClick={() => setActiveView('summary')}
+                >
+                  闭环摘要
+                </button>
+                <button
+                  className={`flex-1 px-3 py-2 text-xs font-medium transition-colors ${
+                    activeView === 'timeline'
+                      ? 'text-primary-400 border-b-2 border-primary-400 bg-primary-500/10'
+                      : 'text-slate-400 hover:text-white hover:bg-dashboard-hover'
+                  }`}
+                  onClick={() => setActiveView('timeline')}
+                >
+                  时间轴
+                </button>
               </div>
 
-              <div className="p-3 flex-shrink-0 flex items-center justify-between">
+              {activeView === 'summary' && (
+                <div className="p-3 space-y-3 overflow-auto flex-1">
+                  <div>
+                    <div className="text-xs text-slate-500 mb-1.5">异常描述</div>
+                    <p className="text-xs text-slate-300">{activeException.description}</p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <div className="text-xs text-slate-500">处置闭环进度</div>
+                    <div className="flex items-center gap-2">
+                      <div className={`flex items-center gap-1.5 px-2 py-1 rounded text-xs ${
+                        activeException.handleOpinion ? 'bg-primary-500/20 text-primary-300' : 'bg-dashboard-surface text-slate-500'
+                      }`}>
+                        {activeException.handleOpinion ? <CheckCheck className="w-3 h-3" /> : <MessageSquare className="w-3 h-3" />}
+                        下发意见
+                      </div>
+                      <div className={`flex items-center gap-1.5 px-2 py-1 rounded text-xs ${
+                        activeException.carrierFeedback ? 'bg-primary-500/20 text-primary-300' : 'bg-dashboard-surface text-slate-500'
+                      }`}>
+                        {activeException.carrierFeedback ? <CheckCheck className="w-3 h-3" /> : <FileText className="w-3 h-3" />}
+                        承运反馈
+                      </div>
+                      <div className={`flex items-center gap-1.5 px-2 py-1 rounded text-xs ${
+                        activeException.status === 'resolved' ? 'bg-emerald-500/20 text-emerald-300' : 'bg-dashboard-surface text-slate-500'
+                      }`}>
+                        {activeException.status === 'resolved' ? <CheckCheck className="w-3 h-3" /> : <CheckCircle className="w-3 h-3" />}
+                        闭环确认
+                      </div>
+                    </div>
+                  </div>
+
+                  {activeException.handleOpinion ? (
+                    <div className="bg-dashboard-surface rounded p-2">
+                      <div className="text-xs text-slate-500 flex items-center gap-1 mb-1">
+                        <MessageSquare className="w-3 h-3" />
+                        最新处置意见 · {activeException.handler} · {formatDateTime(activeException.handleTime!)}
+                      </div>
+                      <div className="text-xs text-primary-300">{activeException.handleOpinion}</div>
+                    </div>
+                  ) : (
+                    <button
+                      className="btn-primary w-full text-xs justify-center"
+                      onClick={() => {
+                        setSelectedException(activeException.id);
+                        navigate('/exception-handling');
+                      }}
+                    >
+                      <MessageSquare className="w-3.5 h-3.5" />
+                      <span>去下发处置意见</span>
+                    </button>
+                  )}
+
+                  {activeException.handleOpinion && !activeException.carrierFeedback && (
+                    <button
+                      className="btn-secondary w-full text-xs justify-center"
+                      onClick={() => setFeedbackModalOpen(true)}
+                    >
+                      <FileImage className="w-3.5 h-3.5" />
+                      <span>承运方回填执行结果</span>
+                    </button>
+                  )}
+
+                  {activeException.carrierFeedback && (
+                    <div className="bg-dashboard-surface rounded p-2">
+                      <div className="text-xs text-slate-500 flex items-center gap-1 mb-1">
+                        <FileImage className="w-3 h-3" />
+                        承运方反馈 · {formatDateTime(activeException.carrierFeedbackTime!)}
+                      </div>
+                      <div className="text-xs text-slate-300 mb-2">{activeException.carrierFeedback}</div>
+                      <div className="flex gap-1.5">
+                        <div className="w-12 h-12 rounded bg-dashboard-card border border-dashed border-dashboard-border flex items-center justify-center text-slate-600 text-[10px]">
+                          📷 现场照片
+                        </div>
+                        <div className="w-12 h-12 rounded bg-dashboard-card border border-dashed border-dashboard-border flex items-center justify-center text-slate-600 text-[10px]">
+                          📷 现场照片
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {activeException.handleOpinion && activeException.status !== 'resolved' && (
+                    <button
+                      className="btn-success w-full text-xs justify-center"
+                      onClick={() => setResolveModalOpen(true)}
+                    >
+                      <CheckCircle className="w-3.5 h-3.5" />
+                      <span>标记异常已闭环</span>
+                    </button>
+                  )}
+
+                  {activeException.status === 'resolved' && (
+                    <div className="bg-emerald-500/10 rounded p-2 border border-emerald-500/20">
+                      <div className="text-xs text-emerald-400 flex items-center gap-1">
+                        <CheckCircle className="w-3.5 h-3.5" />
+                        已于 {formatDateTime(activeException.resolveTime!)} 由 {activeException.resolver} 完成闭环
+                      </div>
+                    </div>
+                  )}
+
+                  {relatedBatches.length > 0 && (
+                    <div className="pt-2 border-t border-dashboard-border">
+                      <div className="text-xs text-slate-500 mb-2 flex items-center gap-1.5">
+                        <Package className="w-3.5 h-3.5" />
+                        关联疫苗批次（{relatedBatches.length}）
+                      </div>
+                      <div className="space-y-1.5">
+                        {relatedBatches.map((b) => (
+                          <div
+                            key={b.id}
+                            className="p-2 rounded bg-dashboard-surface hover:bg-dashboard-hover cursor-pointer transition-colors"
+                            onClick={() => handleJumpToBatch(b.batchNumber)}
+                          >
+                            <div className="flex items-center justify-between">
+                              <span className="font-mono text-xs text-white">{b.batchNumber}</span>
+                              <ChevronRight className="w-3 h-3 text-slate-500" />
+                            </div>
+                            <div className="text-xs text-slate-500">{b.vaccineName} · {b.quantity}剂</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {reviewTempRecords.length > 1 && (
+                    <div className="pt-2 border-t border-dashboard-border">
+                      <div className="text-xs text-slate-500 mb-2">异常前后温度曲线</div>
+                      <TempChart records={reviewTempRecords} height={100} compact />
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {activeView === 'timeline' && (
+                <div className="p-3 overflow-auto flex-1">
+                  {reviewTimelineItems.length > 0 ? (
+                    <div className="pl-2">
+                      <Timeline items={reviewTimelineItems} compact />
+                    </div>
+                  ) : (
+                    <div className="text-xs text-slate-500 py-4 text-center">
+                      暂无复盘数据
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div className="p-3 border-t border-dashboard-border flex-shrink-0 flex items-center justify-between">
                 <div className="text-xs text-slate-500 flex items-center gap-1.5">
                   <Truck className="w-3.5 h-3.5" />
                   <span>{selectedVehicle.plateNumber} · {selectedVehicle.driver}</span>
@@ -275,14 +528,14 @@ const MapOverview: React.FC = () => {
                   className="text-xs text-slate-400 hover:text-white flex items-center gap-1"
                   onClick={handleClearActiveException}
                 >
-                  退出复盘模式 <X className="w-3 h-3" />
+                  退出复盘 <X className="w-3 h-3" />
                 </button>
               </div>
             </div>
           )}
 
           {selectedVehicle && (
-            <div className="dashboard-card border-primary-500/30 animate-slide-up flex flex-col overflow-hidden flex-shrink-0">
+            <div className={`dashboard-card border-primary-500/30 animate-slide-up flex flex-col overflow-hidden ${isReviewMode ? '' : 'flex-shrink-0'}`}>
               <div className="p-3 border-b border-dashboard-border flex-shrink-0">
                 <div className="flex items-center justify-between mb-2">
                   <div className="flex items-center gap-2">
@@ -322,36 +575,37 @@ const MapOverview: React.FC = () => {
                     <span className="text-slate-300">{selectedVehicle.phone}</span>
                   </div>
                 </div>
-                {vehicleExceptions.length > 0 && (
+                {!isReviewMode && vehicleExceptions.length > 0 && (
                   <div className="mt-2 pt-2 border-t border-dashboard-border">
                     <div className="text-xs text-amber-400 flex items-center gap-1 mb-1">
                       <AlertTriangle className="w-3 h-3" />
-                      {vehicleExceptions.length} 条关联异常
+                      {vehicleExceptions.length} 条关联异常（点击复盘）
                     </div>
-                    {vehicleExceptions.slice(0, 2).map((ex) => (
+                    {vehicleExceptions.map((ex) => (
                       <div
                         key={ex.id}
                         className={`text-xs flex items-center gap-1 mb-0.5 p-1 rounded cursor-pointer transition-colors ${
                           activeExceptionId === ex.id ? 'bg-primary-500/20 text-white' : 'text-slate-400 hover:bg-dashboard-hover'
                         }`}
                         onClick={() => {
-                          setActiveExceptionId(ex.id === activeExceptionId ? null : ex.id);
-                          const relevantIds = getRelevantPointIdsForException(ex, trackPoints);
-                          setHighlightTrackSegment({ vehicleId: selectedVehicle.id, pointIds: relevantIds });
+                          const newExId = ex.id === activeExceptionId ? null : ex.id;
+                          setActiveExceptionId(newExId);
+                          if (newExId) {
+                            const relevantIds = getRelevantPointIdsForException(ex, trackPoints);
+                            setHighlightTrackSegment({ vehicleId: selectedVehicle.id, pointIds: relevantIds });
+                            setActiveView('summary');
+                          } else {
+                            setHighlightTrackSegment(null);
+                          }
                         }}
                       >
                         <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
-                          ex.level === 'high' ? 'bg-red-500' : ex.level === 'medium' ? 'bg-amber-500' : 'bg-blue-500'
+                          ex.level === 'high' ? 'bg-red-500 animate-pulse' : ex.level === 'medium' ? 'bg-amber-500' : 'bg-blue-500'
                         }`} />
-                        <span className="truncate">{getExceptionTypeText(ex.type)} - {formatRelativeTime(ex.timestamp)}</span>
+                        <span className="truncate flex-1">{getExceptionTypeText(ex.type)}</span>
+                        <span className="flex-shrink-0">{formatRelativeTime(ex.timestamp)}</span>
                       </div>
                     ))}
-                    <button
-                      className="text-xs text-primary-400 hover:text-primary-300 mt-1 flex items-center gap-0.5"
-                      onClick={() => navigate('/exception-handling')}
-                    >
-                      查看全部异常 <ChevronRight className="w-3 h-3" />
-                    </button>
                   </div>
                 )}
               </div>
@@ -359,53 +613,46 @@ const MapOverview: React.FC = () => {
               <div className="p-3 flex-1 overflow-auto">
                 <div className="text-xs font-medium text-slate-400 mb-2 flex items-center gap-1.5">
                   <Route className="w-3.5 h-3.5" />
-                  {activeException ? '异常相关事件' : '轨迹与事件'}
+                  轨迹与事件
                 </div>
                 {timelineItems.length > 0 ? (
                   <div className="space-y-1.5">
-                    {timelineItems
-                      .filter((_, idx) => {
-                        if (!activeException) return true;
-                        return highlightPointIds.includes(trackPoints[idx]?.id || '');
-                      })
-                      .map((item, idx) => {
-                        const tp = activeException
-                          ? trackPoints.find((p) => p.id === highlightPointIds[idx])
-                          : trackPoints[idx];
-                        const isHighlighted = tp && highlightPointIds.includes(tp.id);
-                        return (
-                          <div
-                            key={idx}
-                            className={`flex items-start gap-2 p-1.5 rounded text-xs ${
-                              isHighlighted
-                                ? 'bg-red-500/10 border border-red-500/20'
-                                : item.type !== 'normal' ? 'bg-amber-500/5 border border-amber-500/10' : ''
-                            }`}
-                          >
-                            <span className="flex-shrink-0 mt-0.5">
-                              {item.type === 'loading' ? '📦' :
-                               item.type === 'unloading' ? '📤' :
-                               item.type === 'stop' ? '🛑' :
-                               item.type === 'door-open' ? '🚪' :
-                               item.type === 'door-close' ? '🔒' : '🔵'}
-                            </span>
-                            <div className="min-w-0">
-                              <div className="flex items-center gap-2">
-                                <span className="text-white font-medium">{item.title}</span>
-                                {item.temp !== undefined && (
-                                  <span className={`data-number ${
-                                    item.temp > 8 || item.temp < 2 ? 'text-red-400' : 'text-slate-400'
-                                  }`}>
-                                    {formatTemperature(item.temp)}
-                                  </span>
-                                )}
-                              </div>
-                              <div className="text-slate-500 truncate">{item.description}</div>
-                              <div className="text-slate-600 data-number">{item.time.split(' ')[1]}</div>
+                    {timelineItems.map((item, idx) => {
+                      const tp = trackPoints[idx];
+                      const isHighlighted = tp && highlightPointIds.includes(tp.id);
+                      return (
+                        <div
+                          key={idx}
+                          className={`flex items-start gap-2 p-1.5 rounded text-xs ${
+                            isHighlighted
+                              ? 'bg-red-500/10 border border-red-500/20'
+                              : item.type !== 'normal' ? 'bg-amber-500/5 border border-amber-500/10' : ''
+                          }`}
+                        >
+                          <span className="flex-shrink-0 mt-0.5">
+                            {item.type === 'loading' ? '📦' :
+                             item.type === 'unloading' ? '📤' :
+                             item.type === 'stop' ? '🛑' :
+                             item.type === 'door-open' ? '🚪' :
+                             item.type === 'door-close' ? '🔒' : '🔵'}
+                          </span>
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="text-white font-medium">{item.title}</span>
+                              {item.temp !== undefined && (
+                                <span className={`data-number ${
+                                  item.temp > 8 || item.temp < 2 ? 'text-red-400' : 'text-slate-400'
+                                }`}>
+                                  {formatTemperature(item.temp)}
+                                </span>
+                              )}
                             </div>
+                            <div className="text-slate-500 truncate">{item.description}</div>
+                            <div className="text-slate-600 data-number">{item.time.split(' ')[1]}</div>
                           </div>
-                        );
-                      })}
+                        </div>
+                      );
+                    })}
                   </div>
                 ) : (
                   <div className="text-xs text-slate-500">暂无轨迹数据</div>
@@ -445,6 +692,7 @@ const MapOverview: React.FC = () => {
                       setSelectedVehicle(v.id);
                       setHighlightTrackSegment(null);
                       setActiveExceptionId(null);
+                      setActiveView('summary');
                     }}
                   >
                     <div className="flex items-center justify-between mb-1">
@@ -584,6 +832,7 @@ const MapOverview: React.FC = () => {
                         <div
                           key={b.id}
                           className="p-2 rounded bg-dashboard-hover flex items-center justify-between text-sm cursor-pointer hover:bg-dashboard-border transition-colors"
+                          onClick={() => handleJumpToBatch(b.batchNumber)}
                         >
                           <div>
                             <div className="text-white font-mono text-xs">{b.batchNumber}</div>
@@ -598,6 +847,96 @@ const MapOverview: React.FC = () => {
                     </div>
                   </div>
                 </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {feedbackModalOpen && activeException && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-6 animate-fade-in" onClick={() => setFeedbackModalOpen(false)}>
+          <div className="w-full max-w-lg bg-dashboard-surface rounded-lg border border-dashboard-border overflow-hidden animate-slide-up" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-5 py-4 border-b border-dashboard-border">
+              <h2 className="text-base font-semibold text-white flex items-center gap-2">
+                <FileImage className="w-4 h-4 text-primary-400" />
+                承运方回填执行结果
+              </h2>
+              <button
+                className="p-2 rounded-md hover:bg-dashboard-hover text-slate-400 hover:text-white transition-colors"
+                onClick={() => setFeedbackModalOpen(false)}
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-5 space-y-4">
+              <div>
+                <div className="text-sm text-slate-300 mb-2">执行结果描述</div>
+                <textarea
+                  className="input-field w-full h-32 resize-none text-sm"
+                  placeholder="请描述问题处理过程、温度复测结果、现场情况等..."
+                  value={feedbackText}
+                  onChange={(e) => setFeedbackText(e.target.value)}
+                />
+              </div>
+              <div>
+                <div className="text-sm text-slate-300 mb-2">上传现场照片（占位）</div>
+                <div className="flex gap-2">
+                  <div className="w-20 h-20 rounded bg-dashboard-card border border-dashed border-dashboard-border flex flex-col items-center justify-center text-slate-600 cursor-pointer hover:border-primary-500/50 hover:text-primary-400 transition-colors">
+                    <FileImage className="w-5 h-5 mb-1" />
+                    <span className="text-[10px]">添加照片</span>
+                  </div>
+                </div>
+              </div>
+              <div className="flex justify-end gap-2 pt-2">
+                <button className="btn-secondary" onClick={() => setFeedbackModalOpen(false)}>取消</button>
+                <button
+                  className="btn-primary"
+                  onClick={handleFeedbackSubmit}
+                  disabled={!feedbackText.trim()}
+                >
+                  <Send className="w-4 h-4" />
+                  <span>提交反馈</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {resolveModalOpen && activeException && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-6 animate-fade-in" onClick={() => setResolveModalOpen(false)}>
+          <div className="w-full max-w-md bg-dashboard-surface rounded-lg border border-dashboard-border overflow-hidden animate-slide-up" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-5 py-4 border-b border-dashboard-border">
+              <h2 className="text-base font-semibold text-white flex items-center gap-2">
+                <CheckCircle className="w-4 h-4 text-emerald-400" />
+                标记异常已闭环
+              </h2>
+              <button
+                className="p-2 rounded-md hover:bg-dashboard-hover text-slate-400 hover:text-white transition-colors"
+                onClick={() => setResolveModalOpen(false)}
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-5 space-y-4">
+              <div className="bg-emerald-500/10 border border-emerald-500/20 rounded p-3 text-sm text-emerald-300">
+                确认此异常已完成处置闭环，处置意见已执行，承运方已反馈，疫苗安全风险已排除。
+              </div>
+              <div>
+                <div className="text-sm text-slate-300 mb-2">闭环确认人</div>
+                <input
+                  className="input-field w-full"
+                  value={resolveName}
+                  onChange={(e) => setResolveName(e.target.value)}
+                  placeholder="请输入您的姓名"
+                />
+              </div>
+              <div className="flex justify-end gap-2 pt-2">
+                <button className="btn-secondary" onClick={() => setResolveModalOpen(false)}>取消</button>
+                <button className="btn-success" onClick={handleResolveSubmit}>
+                  <CheckCircle className="w-4 h-4" />
+                  <span>确认闭环</span>
+                </button>
               </div>
             </div>
           </div>
