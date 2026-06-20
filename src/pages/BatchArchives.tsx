@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { FileBarChart, Search, RotateCcw, Package, Building2, Calendar, Thermometer, User, Truck, X, ChevronRight, Warehouse, MapPin, AlertTriangle, Download, Shield, Clock, CheckCircle, AlertCircle, FileSpreadsheet, CheckSquare, Square } from 'lucide-react';
+import React, { useState, useMemo } from 'react';
+import { FileBarChart, Search, RotateCcw, Package, Building2, Calendar, Thermometer, User, Truck, X, ChevronRight, Warehouse, MapPin, AlertTriangle, Download, Shield, Clock, CheckCircle, AlertCircle, FileSpreadsheet, CheckSquare, Square, Camera, FileText, TrendingUp, BarChart3 } from 'lucide-react';
 import StatsCard from '@/components/StatsCard';
 import TempChart from '@/components/TempChart';
 import { Timeline, TimelineItem } from '@/components/Timeline';
@@ -32,6 +32,7 @@ const BatchArchives: React.FC = () => {
   const { exceptions } = useExceptionStore();
   const { vehicles } = useVehicleStore();
   const [isDetailOpen, setIsDetailOpen] = useState(false);
+  const [monthlyTab, setMonthlyTab] = useState<'batches' | 'tracking'>('batches');
 
   const batches = getFilteredBatches();
   const selectedBatch = selectedBatchId ? getBatchById(selectedBatchId) : null;
@@ -380,6 +381,139 @@ const BatchArchives: React.FC = () => {
     downloadReport(lines.join('\n'), `月度检查汇总报告_${districtName}_${selectedBatches.length}批_${new Date().toISOString().slice(0, 10)}.txt`);
   };
 
+  const handleExportTrackingReport = () => {
+    const { level, county } = useJurisdictionStore.getState();
+    const districtName = level === 'county' && county ? county : '全市';
+    const filteredExceptions = level === 'county' && county
+      ? exceptions.filter((e) => {
+          const v = vehicles.find((vv: any) => vv.id === e.vehicleId);
+          return v && v.district === county;
+        })
+      : exceptions;
+
+    const vehicleGroup = new Map<string, ExceptionEvent[]>();
+    const carrierGroup = new Map<string, ExceptionEvent[]>();
+    filteredExceptions.forEach((ex) => {
+      const vList = [ex.vehicleId];
+      vList.forEach((vid) => {
+        if (!vehicleGroup.has(vid)) vehicleGroup.set(vid, []);
+        vehicleGroup.get(vid)!.push(ex);
+      });
+      const carrier = ex.carrier || ex.plateNumber;
+      if (!carrierGroup.has(carrier)) carrierGroup.set(carrier, []);
+      carrierGroup.get(carrier)!.push(ex);
+    });
+
+    const repeatVehicles = Array.from(vehicleGroup.entries()).filter(([_, exs]) => exs.length > 1);
+    const repeatCarriers = Array.from(carrierGroup.entries()).filter(([_, exs]) => exs.length > 1);
+
+    const lines: string[] = [];
+    lines.push('═══════════════════════════════════════════════════════════════');
+    lines.push('         疫 苗 冷 链 问 题 追 踪 报 告');
+    lines.push('═══════════════════════════════════════════════════════════════');
+    lines.push('');
+    lines.push(`报告生成时间: ${new Date().toLocaleString('zh-CN')}`);
+    lines.push(`上报辖区: ${districtName}`);
+    lines.push('');
+
+    if (level === 'city') {
+      lines.push('═══════════════════════════════════════════════════════════════');
+      lines.push('              各 辖 区 异 常 横 向 对 比');
+      lines.push('═══════════════════════════════════════════════════════════════');
+      lines.push('');
+      const districtMap = new Map<string, ExceptionEvent[]>();
+      filteredExceptions.forEach((ex) => {
+        const v = vehicles.find((vv: any) => vv.id === ex.vehicleId);
+        const d = v ? v.district : '未知';
+        if (!districtMap.has(d)) districtMap.set(d, []);
+        districtMap.get(d)!.push(ex);
+      });
+      if (districtMap.size === 0) {
+        lines.push('  无异常数据。');
+      } else {
+        lines.push('  ┌──────────┬────────┬────────┬────────┬────────┬────────┐');
+        lines.push('  │ 辖区     │ 异常数 │ 高风险 │ 未闭环 │ 涉及车 │ 承运方 │');
+        lines.push('  ├──────────┼────────┼────────┼────────┼────────┼────────┤');
+        Array.from(districtMap.entries()).forEach(([d, exs]) => {
+          const dName = d.padEnd(6, ' ');
+          const highCount = exs.filter((e) => e.level === 'high').length;
+          const unresolved = exs.filter((e) => e.status !== 'resolved').length;
+          const vSet = new Set(exs.map((e) => e.vehicleId));
+          const cSet = new Set(exs.map((e) => e.carrier || e.plateNumber));
+          lines.push(`  │ ${dName} │ ${String(exs.length).padStart(6)} │ ${String(highCount).padStart(6)} │ ${String(unresolved).padStart(6)} │ ${String(vSet.size).padStart(6)} │ ${String(cSet.size).padStart(6)} │`);
+        });
+        lines.push('  └──────────┴────────┴────────┴────────┴────────┴────────┘');
+      }
+      lines.push('');
+    }
+
+    lines.push('═══════════════════════════════════════════════════════════════');
+    lines.push('            按 车 辆 聚 合 重 复 异 常');
+    lines.push('═══════════════════════════════════════════════════════════════');
+    lines.push('');
+    if (repeatVehicles.length === 0) {
+      lines.push('  无同一车辆反复出现异常的情况。');
+    } else {
+      repeatVehicles.sort((a, b) => b[1].length - a[1].length);
+      repeatVehicles.forEach(([vid, exs], idx) => {
+        const v = vehicles.find((vv: any) => vv.id === vid);
+        lines.push(`  ${idx + 1}. ${v ? v.plateNumber : vid} (${v ? v.carrier : '未知承运方'}) - ${exs.length} 次异常`);
+        if (v) {
+          lines.push(`     辖区: ${v.district} · 线路: ${v.route}`);
+        }
+        const unresolved = exs.filter((e) => e.status !== 'resolved').length;
+        lines.push(`     未闭环: ${unresolved} 起 · 异常类型分布:`);
+        const typeMap: Record<string, number> = {};
+        exs.forEach((ex) => { typeMap[getExceptionTypeText(ex.type)] = (typeMap[getExceptionTypeText(ex.type)] || 0) + 1; });
+        Object.entries(typeMap).forEach(([type, count]) => {
+          lines.push(`       ${type}: ${count} 起`);
+        });
+        exs.forEach((ex, i) => {
+          lines.push(`     [${i + 1}] ${formatDateTime(ex.timestamp)} ${getExceptionTypeText(ex.type)} (${getExceptionStatusText(ex.status)})`);
+          if (ex.handleOpinion) lines.push(`         处置: ${ex.handleOpinion}`);
+          if (ex.carrierFeedback) lines.push(`         承运反馈: ${ex.carrierFeedback}`);
+          if (ex.status === 'resolved' && ex.resolver) lines.push(`         闭环: ${ex.resolver} · ${ex.resolveTime}`);
+        });
+        lines.push('');
+      });
+    }
+
+    lines.push('═══════════════════════════════════════════════════════════════');
+    lines.push('            按 承 运 方 聚 合 重 复 异 常');
+    lines.push('═══════════════════════════════════════════════════════════════');
+    lines.push('');
+    if (repeatCarriers.length === 0) {
+      lines.push('  无同一承运方反复出现异常的情况。');
+    } else {
+      repeatCarriers.sort((a, b) => b[1].length - a[1].length);
+      repeatCarriers.forEach(([carrier, exs], idx) => {
+        const unresolved = exs.filter((e) => e.status !== 'resolved').length;
+        const vSet = new Set(exs.map((e) => e.vehicleId));
+        lines.push(`  ${idx + 1}. ${carrier} - ${exs.length} 次异常 · 涉及 ${vSet.size} 辆车 · 未闭环 ${unresolved} 起`);
+        const typeMap: Record<string, number> = {};
+        exs.forEach((ex) => { typeMap[getExceptionTypeText(ex.type)] = (typeMap[getExceptionTypeText(ex.type)] || 0) + 1; });
+        lines.push('     异常类型分布:');
+        Object.entries(typeMap).forEach(([type, count]) => {
+          lines.push(`       ${type}: ${count} 起`);
+        });
+        const vehicleIds = Array.from(vSet);
+        vehicleIds.forEach((vid) => {
+          const v = vehicles.find((vv: any) => vv.id === vid);
+          const vExs = exs.filter((e) => e.vehicleId === vid);
+          lines.push(`     车辆: ${v ? v.plateNumber : vid} (${v ? v.district : '未知'}) - ${vExs.length} 次异常`);
+        });
+        lines.push('');
+      });
+    }
+
+    lines.push('═══════════════════════════════════════════════════════════════');
+    lines.push(`  上报单位: ${districtName}疾控中心冷链监管科`);
+    lines.push('  本报告由疾控中心冷链监管系统自动生成');
+    lines.push('═══════════════════════════════════════════════════════════════');
+
+    downloadReport(lines.join('\n'), `问题追踪报告_${districtName}_${new Date().toISOString().slice(0, 10)}.txt`);
+  };
+
   return (
     <div className="h-full flex flex-col gap-5 -m-6 p-6">
       <JurisdictionSelector />
@@ -470,29 +604,69 @@ const BatchArchives: React.FC = () => {
       {monthlyCheckMode && (
         <div className="dashboard-card p-3 bg-primary-500/5 border-primary-500/20 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <label className="flex items-center gap-2 text-sm text-slate-300 cursor-pointer">
-              {allSelected ? (
-                <CheckSquare className="w-4 h-4 text-primary-400" />
-              ) : someSelected ? (
-                <CheckSquare className="w-4 h-4 text-primary-400 opacity-60" />
-              ) : (
-                <Square className="w-4 h-4 text-slate-500" />
-              )}
-              <span onClick={handleSelectAll}>全选</span>
-            </label>
-            <span className="text-xs text-slate-500">
-              已选择 <span className="text-primary-400 font-medium">{selectedBatchIds.length}</span> / {batches.length} 批
-            </span>
+            <div className="flex border border-dashboard-border rounded overflow-hidden">
+              <button
+                className={`px-3 py-1.5 text-xs font-medium transition-colors ${
+                  monthlyTab === 'batches' ? 'bg-primary-600 text-white' : 'bg-dashboard-surface text-slate-400 hover:text-white'
+                }`}
+                onClick={() => setMonthlyTab('batches')}
+              >
+                批次选择
+              </button>
+              <button
+                className={`px-3 py-1.5 text-xs font-medium transition-colors flex items-center gap-1.5 ${
+                  monthlyTab === 'tracking' ? 'bg-primary-600 text-white' : 'bg-dashboard-surface text-slate-400 hover:text-white'
+                }`}
+                onClick={() => setMonthlyTab('tracking')}
+              >
+                <TrendingUp className="w-3 h-3" />
+                问题追踪
+              </button>
+            </div>
+            {monthlyTab === 'batches' && (
+              <>
+                <label className="flex items-center gap-2 text-sm text-slate-300 cursor-pointer">
+                  {allSelected ? (
+                    <CheckSquare className="w-4 h-4 text-primary-400" />
+                  ) : someSelected ? (
+                    <CheckSquare className="w-4 h-4 text-primary-400 opacity-60" />
+                  ) : (
+                    <Square className="w-4 h-4 text-slate-500" />
+                  )}
+                  <span onClick={handleSelectAll}>全选</span>
+                </label>
+                <span className="text-xs text-slate-500">
+                  已选择 <span className="text-primary-400 font-medium">{selectedBatchIds.length}</span> / {batches.length} 批
+                </span>
+              </>
+            )}
           </div>
-          <button
-            className="btn-primary text-xs"
-            onClick={handleExportSummaryReport}
-            disabled={!hasSelected}
-          >
-            <Download className="w-4 h-4" />
-            <span>导出汇总报告</span>
-          </button>
+          <div className="flex items-center gap-2">
+            {monthlyTab === 'batches' && (
+              <button
+                className="btn-primary text-xs"
+                onClick={handleExportSummaryReport}
+                disabled={!hasSelected}
+              >
+                <Download className="w-4 h-4" />
+                <span>导出汇总报告</span>
+              </button>
+            )}
+            {monthlyTab === 'tracking' && (
+              <button
+                className="btn-primary text-xs"
+                onClick={handleExportTrackingReport}
+              >
+                <Download className="w-4 h-4" />
+                <span>导出问题追踪报告</span>
+              </button>
+            )}
+          </div>
         </div>
+      )}
+
+      {monthlyCheckMode && monthlyTab === 'tracking' && (
+        <ProblemTrackingView exceptions={exceptions} vehicles={vehicles} />
       )}
 
       <div className="dashboard-card flex-1 overflow-hidden flex flex-col">
@@ -779,10 +953,43 @@ const BatchDetailDrawer: React.FC<{
                       <div className="mt-2 pt-2 border-t border-dashboard-border">
                         <div className="flex items-center gap-1.5 text-xs text-slate-500 mb-1">
                           <User className="w-3 h-3" />
-                          <span>最新处置意见 · {ex.handler} · {formatDateTime(ex.handleTime!)}</span>
+                          <span>处置意见 · {ex.handler} · {formatDateTime(ex.handleTime!)}</span>
                         </div>
-                        <div className="text-xs text-primary-300 bg-dashboard-hover p-2 rounded">
+                        <div className="text-xs text-primary-300 bg-primary-500/10 p-2 rounded">
                           {ex.handleOpinion}
+                        </div>
+                      </div>
+                    )}
+                    {ex.carrierFeedback && (
+                      <div className="mt-2 pt-2 border-t border-dashboard-border">
+                        <div className="flex items-center gap-1.5 text-xs text-slate-500 mb-1">
+                          <FileText className="w-3 h-3" />
+                          <span>承运方执行结果 · {formatDateTime(ex.carrierFeedbackTime!)}</span>
+                        </div>
+                        <div className="text-xs text-emerald-300 bg-emerald-500/10 p-2 rounded mb-2">
+                          {ex.carrierFeedback}
+                        </div>
+                        {(ex.carrierPhotos?.length || 0) > 0 ? (
+                          <div className="flex gap-1.5">
+                            {ex.carrierPhotos?.map((_: any, i: number) => (
+                              <div key={i} className="w-12 h-12 rounded bg-dashboard-hover border border-dashboard-border flex items-center justify-center">
+                                <Camera className="w-5 h-5 text-slate-500" />
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="text-xs text-slate-500 flex items-center gap-1">
+                            <Camera className="w-3 h-3" />
+                            暂未上传现场照片
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {ex.status === 'resolved' && ex.resolver && (
+                      <div className="mt-2 pt-2 border-t border-dashboard-border">
+                        <div className="flex items-center gap-1.5 text-xs text-emerald-400">
+                          <CheckCircle className="w-3 h-3" />
+                          闭环确认: {ex.resolver} · {formatDateTime(ex.resolveTime!)}
                         </div>
                       </div>
                     )}
@@ -984,7 +1191,16 @@ function generateBatchReport(
       lines.push(`  ${i + 1}. [${getExceptionStatusText(ex.status)}] ${getExceptionTypeText(ex.type)} - ${ex.plateNumber}`);
       lines.push(`     描述: ${ex.description}`);
       if (ex.handleOpinion) {
-        lines.push(`     最新处置意见: ${ex.handleOpinion} (${ex.handler} · ${ex.handleTime})`);
+        lines.push(`     处置意见: ${ex.handleOpinion} (${ex.handler} · ${ex.handleTime})`);
+      }
+      if (ex.carrierFeedback) {
+        lines.push(`     承运方执行结果: ${ex.carrierFeedback} (${ex.carrierFeedbackTime})`);
+      }
+      if (ex.carrierPhotos && ex.carrierPhotos.length > 0) {
+        lines.push(`     现场照片: ${ex.carrierPhotos.length} 张`);
+      }
+      if (ex.status === 'resolved' && ex.resolver) {
+        lines.push(`     闭环确认: ${ex.resolver} · ${ex.resolveTime}`);
       }
     });
   }
@@ -1023,5 +1239,298 @@ function downloadReport(content: string, filename: string) {
   a.click();
   URL.revokeObjectURL(url);
 }
+
+const ProblemTrackingView: React.FC<{
+  exceptions: ExceptionEvent[];
+  vehicles: any[];
+}> = ({ exceptions, vehicles }) => {
+  const { level, county } = useJurisdictionStore();
+  const [trackingView, setTrackingView] = useState<'vehicle' | 'carrier'>('vehicle');
+
+  const filteredExceptions = level === 'county' && county
+    ? exceptions.filter((e) => {
+        const v = vehicles.find((vv: any) => vv.id === e.vehicleId);
+        return v && v.district === county;
+      })
+    : exceptions;
+
+  const vehicleGroup = useMemo(() => {
+    const map = new Map<string, ExceptionEvent[]>();
+    filteredExceptions.forEach((ex) => {
+      if (!map.has(ex.vehicleId)) map.set(ex.vehicleId, []);
+      map.get(ex.vehicleId)!.push(ex);
+    });
+    return Array.from(map.entries())
+      .filter(([_, exs]) => exs.length > 0)
+      .sort((a, b) => b[1].length - a[1].length);
+  }, [filteredExceptions]);
+
+  const carrierGroup = useMemo(() => {
+    const map = new Map<string, ExceptionEvent[]>();
+    filteredExceptions.forEach((ex) => {
+      const carrier = ex.carrier || ex.plateNumber;
+      if (!map.has(carrier)) map.set(carrier, []);
+      map.get(carrier)!.push(ex);
+    });
+    return Array.from(map.entries())
+      .filter(([_, exs]) => exs.length > 0)
+      .sort((a, b) => b[1].length - a[1].length);
+  }, [filteredExceptions]);
+
+  const districtStats = useMemo(() => {
+    if (level !== 'city') return null;
+    const map = new Map<string, { total: number; high: number; unresolved: number; vehicles: Set<string>; carriers: Set<string> }>();
+    filteredExceptions.forEach((ex) => {
+      const v = vehicles.find((vv: any) => vv.id === ex.vehicleId);
+      const d = v ? v.district : '未知';
+      if (!map.has(d)) map.set(d, { total: 0, high: 0, unresolved: 0, vehicles: new Set(), carriers: new Set() });
+      const s = map.get(d)!;
+      s.total++;
+      if (ex.level === 'high') s.high++;
+      if (ex.status !== 'resolved') s.unresolved++;
+      if (ex.vehicleId) s.vehicles.add(ex.vehicleId);
+      s.carriers.add(ex.carrier || ex.plateNumber);
+    });
+    return Array.from(map.entries()).sort((a, b) => b[1].total - a[1].total);
+  }, [filteredExceptions, level, vehicles]);
+
+  const repeatCount = trackingView === 'vehicle'
+    ? vehicleGroup.filter(([_, exs]) => exs.length > 1).length
+    : carrierGroup.filter(([_, exs]) => exs.length > 1).length;
+
+  return (
+    <div className="space-y-4">
+      {level === 'city' && districtStats && districtStats.length > 0 && (
+        <div className="dashboard-card p-4">
+          <h3 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
+            <BarChart3 className="w-4 h-4 text-primary-400" />
+            各辖区异常横向对比
+          </h3>
+          <div className="overflow-auto">
+            <table className="w-full">
+              <thead>
+                <tr className="text-xs text-slate-400 border-b border-dashboard-border">
+                  <th className="text-left py-2 px-3 font-medium">辖区</th>
+                  <th className="text-center py-2 px-3 font-medium">异常数</th>
+                  <th className="text-center py-2 px-3 font-medium">高风险</th>
+                  <th className="text-center py-2 px-3 font-medium">未闭环</th>
+                  <th className="text-center py-2 px-3 font-medium">涉及车辆</th>
+                  <th className="text-center py-2 px-3 font-medium">承运方</th>
+                </tr>
+              </thead>
+              <tbody className="text-sm">
+                {districtStats.map(([d, s]) => (
+                  <tr key={d} className="border-b border-dashboard-border/50 hover:bg-dashboard-hover transition-colors">
+                    <td className="py-2 px-3 text-white">{d}</td>
+                    <td className="py-2 px-3 text-center">
+                      <span className="data-number text-amber-400">{s.total}</span>
+                    </td>
+                    <td className="py-2 px-3 text-center">
+                      <span className={`data-number ${s.high > 0 ? 'text-red-400' : 'text-slate-500'}`}>{s.high}</span>
+                    </td>
+                    <td className="py-2 px-3 text-center">
+                      <span className={`data-number ${s.unresolved > 0 ? 'text-red-400' : 'text-emerald-400'}`}>{s.unresolved}</span>
+                    </td>
+                    <td className="py-2 px-3 text-center data-number">{s.vehicles.size}</td>
+                    <td className="py-2 px-3 text-center data-number">{s.carriers.size}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {level === 'county' && county && (
+        <div className="dashboard-card p-3 bg-primary-500/5 border-primary-500/20">
+          <div className="text-xs text-slate-400">
+            当前仅显示 <span className="text-primary-400 font-medium">{county}</span> 辖区异常数据
+          </div>
+        </div>
+      )}
+
+      <div className="dashboard-card p-4">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-3">
+            <h3 className="text-sm font-semibold text-white flex items-center gap-2">
+              <TrendingUp className="w-4 h-4 text-amber-400" />
+              问题追踪
+            </h3>
+            <div className="flex border border-dashboard-border rounded overflow-hidden">
+              <button
+                className={`px-3 py-1.5 text-xs font-medium transition-colors ${
+                  trackingView === 'vehicle' ? 'bg-primary-600 text-white' : 'bg-dashboard-surface text-slate-400 hover:text-white'
+                }`}
+                onClick={() => setTrackingView('vehicle')}
+              >
+                按车辆
+              </button>
+              <button
+                className={`px-3 py-1.5 text-xs font-medium transition-colors ${
+                  trackingView === 'carrier' ? 'bg-primary-600 text-white' : 'bg-dashboard-surface text-slate-400 hover:text-white'
+                }`}
+                onClick={() => setTrackingView('carrier')}
+              >
+                按承运方
+              </button>
+            </div>
+          </div>
+          <span className="text-xs text-slate-500">
+            重复异常: <span className="text-amber-400 font-medium">{repeatCount}</span> 组
+          </span>
+        </div>
+
+        <div className="space-y-3">
+          {trackingView === 'vehicle' && vehicleGroup.map(([vid, exs]) => {
+            const v = vehicles.find((vv: any) => vv.id === vid);
+            const unresolved = exs.filter((e) => e.status !== 'resolved').length;
+            const isRepeat = exs.length > 1;
+            const typeMap: Record<string, number> = {};
+            exs.forEach((ex) => { typeMap[getExceptionTypeText(ex.type)] = (typeMap[getExceptionTypeText(ex.type)] || 0) + 1; });
+
+            return (
+              <div
+                key={vid}
+                className={`p-3 rounded border ${
+                  isRepeat ? 'bg-amber-500/5 border-amber-500/30' : 'bg-dashboard-surface border-dashboard-border'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <Truck className={`w-4 h-4 ${isRepeat ? 'text-amber-400' : 'text-slate-400'}`} />
+                    <span className="text-sm text-white font-medium">{v ? v.plateNumber : vid}</span>
+                    {isRepeat && (
+                      <span className="px-1.5 py-0.5 rounded text-[10px] bg-amber-500/20 text-amber-300">
+                        重复异常 {exs.length} 次
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-3 text-xs">
+                    <span className="text-slate-500">{v ? v.carrier : ''}</span>
+                    <span className={`px-2 py-0.5 rounded ${
+                      unresolved > 0 ? 'bg-red-500/20 text-red-400' : 'bg-emerald-500/20 text-emerald-400'
+                    }`}>
+                      未闭环 {unresolved}
+                    </span>
+                  </div>
+                </div>
+                {v && (
+                  <div className="text-xs text-slate-500 mb-2 flex items-center gap-3">
+                    <span className="flex items-center gap-1"><MapPin className="w-3 h-3" />{v.district}</span>
+                    <span>{v.route}</span>
+                  </div>
+                )}
+                <div className="flex gap-2 mb-2">
+                  {Object.entries(typeMap).map(([type, count]) => (
+                    <span key={type} className="px-2 py-0.5 rounded text-xs bg-dashboard-hover text-slate-300">
+                      {type} {count}
+                    </span>
+                  ))}
+                </div>
+                <div className="space-y-1">
+                  {exs.map((ex) => (
+                    <div key={ex.id} className="flex items-center gap-2 text-xs text-slate-400 py-1">
+                      <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
+                        ex.level === 'high' ? 'bg-red-500' : ex.level === 'medium' ? 'bg-amber-500' : 'bg-blue-500'
+                      }`} />
+                      <span>{formatDateTime(ex.timestamp)}</span>
+                      <span className="text-slate-300">{getExceptionTypeText(ex.type)}</span>
+                      <span className={`ml-auto ${
+                        ex.status === 'pending' ? 'text-red-400' :
+                        ex.status === 'handling' ? 'text-amber-400' : 'text-emerald-400'
+                      }`}>
+                        {getExceptionStatusText(ex.status)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+
+          {trackingView === 'carrier' && carrierGroup.map(([carrier, exs]) => {
+            const unresolved = exs.filter((e) => e.status !== 'resolved').length;
+            const isRepeat = exs.length > 1;
+            const vSet = new Set(exs.map((e) => e.vehicleId));
+            const typeMap: Record<string, number> = {};
+            exs.forEach((ex) => { typeMap[getExceptionTypeText(ex.type)] = (typeMap[getExceptionTypeText(ex.type)] || 0) + 1; });
+
+            return (
+              <div
+                key={carrier}
+                className={`p-3 rounded border ${
+                  isRepeat ? 'bg-amber-500/5 border-amber-500/30' : 'bg-dashboard-surface border-dashboard-border'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <Building2 className={`w-4 h-4 ${isRepeat ? 'text-amber-400' : 'text-slate-400'}`} />
+                    <span className="text-sm text-white font-medium">{carrier}</span>
+                    {isRepeat && (
+                      <span className="px-1.5 py-0.5 rounded text-[10px] bg-amber-500/20 text-amber-300">
+                        重复异常 {exs.length} 次
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-3 text-xs">
+                    <span className="text-slate-500">涉及 {vSet.size} 辆车</span>
+                    <span className={`px-2 py-0.5 rounded ${
+                      unresolved > 0 ? 'bg-red-500/20 text-red-400' : 'bg-emerald-500/20 text-emerald-400'
+                    }`}>
+                      未闭环 {unresolved}
+                    </span>
+                  </div>
+                </div>
+                <div className="flex gap-2 mb-2">
+                  {Object.entries(typeMap).map(([type, count]) => (
+                    <span key={type} className="px-2 py-0.5 rounded text-xs bg-dashboard-hover text-slate-300">
+                      {type} {count}
+                    </span>
+                  ))}
+                </div>
+                <div className="space-y-1.5">
+                  {Array.from(vSet).map((vid) => {
+                    const v = vehicles.find((vv: any) => vv.id === vid);
+                    const vExs = exs.filter((e) => e.vehicleId === vid);
+                    return (
+                      <div key={vid} className="p-2 rounded bg-dashboard-surface border border-dashboard-border">
+                        <div className="flex items-center justify-between mb-1">
+                          <div className="flex items-center gap-2 text-xs">
+                            <Truck className="w-3 h-3 text-slate-400" />
+                            <span className="text-white">{v ? v.plateNumber : vid}</span>
+                            {v && <span className="text-slate-500">· {v.district}</span>}
+                          </div>
+                          <span className="text-xs text-slate-500">{vExs.length} 次异常</span>
+                        </div>
+                        <div className="flex flex-wrap gap-1">
+                          {vExs.map((ex) => (
+                            <span key={ex.id} className={`text-[10px] px-1.5 py-0.5 rounded ${
+                              ex.status === 'pending' ? 'bg-red-500/20 text-red-400' :
+                              ex.status === 'handling' ? 'bg-amber-500/20 text-amber-400' :
+                              'bg-emerald-500/20 text-emerald-400'
+                            }`}>
+                              {getExceptionTypeText(ex.type)}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+
+          {filteredExceptions.length === 0 && (
+            <div className="py-12 text-center text-slate-500">
+              <CheckCircle className="w-10 h-10 mx-auto mb-2 text-emerald-500/30" />
+              <div>当前辖区无异常记录</div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
 
 export default BatchArchives;

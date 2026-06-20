@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Truck, Thermometer, AlertTriangle, CheckCircle, Route, Filter, RotateCcw, User, Phone, ChevronRight, X, Maximize2, MapPin, Clock, Crosshair, MessageSquare, Shield, Package, FileImage, Send, CheckCheck, FileText } from 'lucide-react';
+import { Truck, Thermometer, AlertTriangle, CheckCircle, Route, Filter, RotateCcw, User, Phone, ChevronRight, X, Maximize2, MapPin, Clock, Crosshair, MessageSquare, Shield, Package, FileImage, Send, CheckCheck, FileText, Camera, Building2, Calendar, Warehouse } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import StatsCard from '@/components/StatsCard';
 import MapView from '@/components/MapView';
@@ -12,8 +12,8 @@ import { useBatchStore } from '@/store/batchStore';
 import { useExceptionStore } from '@/store/exceptionStore';
 import { useJurisdictionStore } from '@/store/jurisdictionStore';
 import { routes, carriers, vaccineTypes } from '@/mock/vehicles';
-import { formatTemperature, getEventTypeText, getVehicleStatusText, getExceptionTypeText, formatRelativeTime, getExceptionStatusText, formatDateTime, getRelevantPointIdsForException } from '@/utils/format';
-import type { TrackPoint, ExceptionEvent } from '@/types';
+import { formatTemperature, getEventTypeText, getVehicleStatusText, getExceptionTypeText, formatRelativeTime, getExceptionStatusText, formatDateTime, getRelevantPointIdsForException, getBatchStatusText } from '@/utils/format';
+import type { TrackPoint, ExceptionEvent, VaccineBatch } from '@/types';
 
 const MapOverview: React.FC = () => {
   const navigate = useNavigate();
@@ -42,6 +42,9 @@ const MapOverview: React.FC = () => {
   const [feedbackText, setFeedbackText] = useState('');
   const [resolveName, setResolveName] = useState('市级管理员');
   const [activeView, setActiveView] = useState<'summary' | 'timeline'>('summary');
+  const [batchDetailOpen, setBatchDetailOpen] = useState(false);
+  const [batchDetailBatch, setBatchDetailBatch] = useState<VaccineBatch | null>(null);
+  const [batchDetailSourceExceptionId, setBatchDetailSourceExceptionId] = useState<string | null>(null);
   const { level: jurisdictionLevel, county: countyDistrict } = useJurisdictionStore();
 
   const stats = getVehicleStats();
@@ -156,16 +159,27 @@ const MapOverview: React.FC = () => {
     if ((state as any).locateVehicleId) {
       const lid = (state as any).locateVehicleId;
       setSelectedVehicle(lid);
-      const vehicle = useVehicleStore.getState().vehicles.find((v) => v.id === lid);
-      if (vehicle) {
-        const tps = useVehicleStore.getState().trackPoints[lid] || [];
-        const recentEx = useExceptionStore.getState().exceptions
-          .filter((e) => e.vehicleId === lid)
-          .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())[0];
-        if (recentEx) {
-          setActiveExceptionId(recentEx.id);
-          const relevantIds = getRelevantPointIdsForException(recentEx, tps);
+      const currentActiveExId = useVehicleStore.getState().activeExceptionId;
+      if (currentActiveExId) {
+        const ex = useExceptionStore.getState().exceptions.find((e) => e.id === currentActiveExId);
+        if (ex) {
+          setActiveExceptionId(ex.id);
+          const tps = useVehicleStore.getState().trackPoints[lid] || [];
+          const relevantIds = getRelevantPointIdsForException(ex, tps);
           setHighlightTrackSegment({ vehicleId: lid, pointIds: relevantIds });
+        }
+      } else {
+        const vehicle = useVehicleStore.getState().vehicles.find((v) => v.id === lid);
+        if (vehicle) {
+          const tps = useVehicleStore.getState().trackPoints[lid] || [];
+          const recentEx = useExceptionStore.getState().exceptions
+            .filter((e) => e.vehicleId === lid)
+            .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())[0];
+          if (recentEx) {
+            setActiveExceptionId(recentEx.id);
+            const relevantIds = getRelevantPointIdsForException(recentEx, tps);
+            setHighlightTrackSegment({ vehicleId: lid, pointIds: relevantIds });
+          }
         }
       }
       useExceptionStore.setState({ locateVehicleId: null });
@@ -209,9 +223,18 @@ const MapOverview: React.FC = () => {
   const handleJumpToBatch = (batchNumber: string) => {
     const batch = getBatchesByBatchNumber(batchNumber);
     if (batch) {
-      setSelectedBatch(batch.id);
-      navigate('/batch-archives');
+      setBatchDetailBatch(batch);
+      setBatchDetailSourceExceptionId(activeExceptionId);
+      setBatchDetailOpen(true);
     }
+  };
+
+  const handleCloseBatchDetail = () => {
+    setBatchDetailOpen(false);
+    setTimeout(() => {
+      setBatchDetailBatch(null);
+      setBatchDetailSourceExceptionId(null);
+    }, 300);
   };
 
   return (
@@ -942,6 +965,254 @@ const MapOverview: React.FC = () => {
           </div>
         </div>
       )}
+
+      {batchDetailOpen && batchDetailBatch && (
+        <BatchDetailInReview
+          batch={batchDetailBatch}
+          sourceExceptionId={batchDetailSourceExceptionId}
+          onClose={handleCloseBatchDetail}
+          exceptions={exceptions}
+          vehicles={allVehicles}
+        />
+      )}
+    </div>
+  );
+};
+
+const BatchDetailInReview: React.FC<{
+  batch: VaccineBatch;
+  sourceExceptionId: string | null;
+  onClose: () => void;
+  exceptions: ExceptionEvent[];
+  vehicles: any[];
+}> = ({ batch, sourceExceptionId, onClose, exceptions, vehicles }) => {
+  const relatedExceptions = exceptions.filter((e) => {
+    const vehicle = vehicles.find((v: any) => v.id === e.vehicleId);
+    return vehicle && vehicle.batchNumbers.includes(batch.batchNumber);
+  });
+  const relatedVehicles = vehicles.filter((v: any) => v.batchNumbers.includes(batch.batchNumber));
+  const sourceException = sourceExceptionId ? exceptions.find((e) => e.id === sourceExceptionId) : null;
+
+  const timelineItems: TimelineItem[] = batch.transportChain.map((node) => ({
+    type: node.type,
+    title: node.name,
+    time: node.time,
+    description: node.description,
+    person: node.person,
+  }));
+
+  const hasAnomaly = batch.temperatureRecords.some((r) => r.temp > 8 || r.temp < 2);
+  const avgTemp = batch.temperatureRecords.reduce((sum, r) => sum + r.temp, 0) / (batch.temperatureRecords.length || 1);
+  const maxTemp = Math.max(...batch.temperatureRecords.map((r) => r.temp));
+  const minTemp = Math.min(...batch.temperatureRecords.map((r) => r.temp));
+
+  return (
+    <div className="fixed inset-0 z-[55] flex animate-fade-in" onClick={onClose}>
+      <div className="absolute inset-0 bg-black/60" />
+      <div
+        className="ml-auto w-full max-w-3xl h-full bg-dashboard-surface border-l border-dashboard-border overflow-hidden flex flex-col animate-slide-up"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between px-6 py-4 border-b border-dashboard-border flex-shrink-0">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-lg bg-primary-500/20 flex items-center justify-center">
+              <Package className="w-5 h-5 text-primary-400" />
+            </div>
+            <div>
+              <h2 className="text-lg font-semibold text-white font-mono">{batch.batchNumber}</h2>
+              <p className="text-xs text-slate-400">{batch.vaccineName} · 倒查视图</p>
+            </div>
+            {sourceException && (
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs ml-2 bg-red-500/10 border border-red-500/20 text-red-300">
+                <Shield className="w-3 h-3" />
+                来自: {getExceptionTypeText(sourceException.type)} - {sourceException.plateNumber}
+              </span>
+            )}
+          </div>
+          <button
+            className="p-2 rounded-md hover:bg-dashboard-hover text-slate-400 hover:text-white transition-colors"
+            onClick={onClose}
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-auto p-6 space-y-5">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div className="dashboard-card p-3">
+              <div className="flex items-center gap-2 text-slate-400 text-xs mb-1.5">
+                <Building2 className="w-3.5 h-3.5" />
+                生产厂家
+              </div>
+              <div className="text-sm text-white">{batch.manufacturer}</div>
+            </div>
+            <div className="dashboard-card p-3">
+              <div className="flex items-center gap-2 text-slate-400 text-xs mb-1.5">
+                <Package className="w-3.5 h-3.5" />
+                批次数量
+              </div>
+              <div className="text-sm text-white data-number">{batch.quantity.toLocaleString()} 剂</div>
+            </div>
+            <div className="dashboard-card p-3">
+              <div className="flex items-center gap-2 text-slate-400 text-xs mb-1.5">
+                <Calendar className="w-3.5 h-3.5" />
+                生产日期
+              </div>
+              <div className="text-sm text-white data-number">{batch.productionDate}</div>
+            </div>
+            <div className="dashboard-card p-3">
+              <div className="flex items-center gap-2 text-slate-400 text-xs mb-1.5">
+                <Calendar className="w-3.5 h-3.5" />
+                有效期至
+              </div>
+              <div className="text-sm text-white data-number">{batch.expiryDate}</div>
+            </div>
+          </div>
+
+          {relatedExceptions.length > 0 && (
+            <div className="dashboard-card p-4">
+              <h3 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
+                <Shield className="w-4 h-4 text-red-400" />
+                关联异常事件
+                <span className="text-xs text-slate-500 font-normal">({relatedExceptions.length})</span>
+              </h3>
+              <div className="space-y-3">
+                {relatedExceptions.map((ex) => (
+                  <div
+                    key={ex.id}
+                    className={`p-3 rounded bg-dashboard-surface border ${
+                      ex.id === sourceExceptionId ? 'border-red-500/50 bg-red-500/5' : 'border-dashboard-border'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-2">
+                        <span className={`w-2 h-2 rounded-full ${
+                          ex.level === 'high' ? 'bg-red-500' : ex.level === 'medium' ? 'bg-amber-500' : 'bg-blue-500'
+                        }`} />
+                        <span className="text-sm text-white font-medium">{getExceptionTypeText(ex.type)}</span>
+                        <RiskBadge level={ex.level} size="sm" />
+                        {ex.id === sourceExceptionId && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-500/20 text-red-300">来源异常</span>
+                        )}
+                      </div>
+                      <span className={`px-2 py-0.5 rounded text-xs ${
+                        ex.status === 'pending' ? 'bg-red-500/20 text-red-400' :
+                        ex.status === 'handling' ? 'bg-amber-500/20 text-amber-400' :
+                        'bg-emerald-500/20 text-emerald-400'
+                      }`}>
+                        {getExceptionStatusText(ex.status)}
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-400 mb-2">{ex.description}</p>
+                    <div className="flex items-center gap-4 text-xs text-slate-500">
+                      <span className="flex items-center gap-1"><Truck className="w-3 h-3" />{ex.plateNumber}</span>
+                      <span className="flex items-center gap-1"><Clock className="w-3 h-3" />{formatRelativeTime(ex.timestamp)}</span>
+                      {ex.temperature !== undefined && (
+                        <span className={`data-number ${ex.temperature > 8 ? 'text-red-400' : 'text-slate-400'}`}>
+                          {formatTemperature(ex.temperature)}
+                        </span>
+                      )}
+                    </div>
+                    {ex.handleOpinion && (
+                      <div className="mt-2 pt-2 border-t border-dashboard-border">
+                        <div className="flex items-center gap-1.5 text-xs text-slate-500 mb-1">
+                          <User className="w-3 h-3" />
+                          <span>处置意见 · {ex.handler} · {formatDateTime(ex.handleTime!)}</span>
+                        </div>
+                        <div className="text-xs text-primary-300 bg-primary-500/10 p-2 rounded">{ex.handleOpinion}</div>
+                      </div>
+                    )}
+                    {ex.carrierFeedback && (
+                      <div className="mt-2 pt-2 border-t border-dashboard-border">
+                        <div className="flex items-center gap-1.5 text-xs text-slate-500 mb-1">
+                          <FileText className="w-3 h-3" />
+                          <span>承运方执行结果 · {formatDateTime(ex.carrierFeedbackTime!)}</span>
+                        </div>
+                        <div className="text-xs text-emerald-300 bg-emerald-500/10 p-2 rounded mb-2">{ex.carrierFeedback}</div>
+                        {(ex.carrierPhotos?.length || 0) > 0 ? (
+                          <div className="flex gap-1.5">
+                            {ex.carrierPhotos?.map((_, i) => (
+                              <div key={i} className="w-12 h-12 rounded bg-dashboard-hover border border-dashboard-border flex items-center justify-center">
+                                <Camera className="w-5 h-5 text-slate-500" />
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="text-xs text-slate-500 flex items-center gap-1"><Camera className="w-3 h-3" />暂未上传现场照片</div>
+                        )}
+                      </div>
+                    )}
+                    {ex.status === 'resolved' && ex.resolver && (
+                      <div className="mt-2 pt-2 border-t border-dashboard-border">
+                        <div className="flex items-center gap-1.5 text-xs text-emerald-400">
+                          <CheckCircle className="w-3 h-3" />
+                          闭环确认: {ex.resolver} · {formatDateTime(ex.resolveTime!)}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="dashboard-card p-4">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-sm font-semibold text-white flex items-center gap-2">
+                <Thermometer className="w-4 h-4 text-primary-400" />
+                温度监控记录
+              </h3>
+              <div className="flex gap-4 text-xs">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-slate-500">平均:</span>
+                  <span className={`data-number ${avgTemp > 8 || avgTemp < 2 ? 'text-red-400' : 'text-emerald-400'}`}>
+                    {avgTemp.toFixed(1)}°C
+                  </span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-slate-500">最高:</span>
+                  <span className={`data-number ${maxTemp > 8 ? 'text-red-400' : 'text-slate-200'}`}>
+                    {maxTemp.toFixed(1)}°C
+                  </span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-slate-500">最低:</span>
+                  <span className={`data-number ${minTemp < 2 ? 'text-red-400' : 'text-slate-200'}`}>
+                    {minTemp.toFixed(1)}°C
+                  </span>
+                </div>
+              </div>
+            </div>
+            <TempChart records={batch.temperatureRecords} height={200} />
+            {hasAnomaly && (
+              <div className="mt-4 p-3 rounded bg-amber-500/10 border border-amber-500/30 text-xs text-amber-300 flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                <span>该批次存在温度异常记录，部分时段温度超出 2-8°C 安全范围。</span>
+              </div>
+            )}
+          </div>
+
+          <div className="dashboard-card p-4">
+            <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
+              <Truck className="w-4 h-4 text-primary-400" />
+              全链路追溯
+            </h3>
+            <div className="pl-2">
+              <Timeline items={timelineItems} compact />
+            </div>
+          </div>
+        </div>
+
+        <div className="px-6 py-4 border-t border-dashboard-border flex items-center justify-between flex-shrink-0">
+          <div className="text-xs text-slate-500">
+            <Warehouse className="w-3.5 h-3.5 inline mr-1" />
+            起始仓: {batch.warehouse}
+          </div>
+          <button className="btn-secondary" onClick={onClose}>
+            返回地图复盘
+          </button>
+        </div>
+      </div>
     </div>
   );
 };
