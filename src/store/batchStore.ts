@@ -12,6 +12,7 @@ interface BatchState {
   getFilteredBatches: () => VaccineBatch[];
   getBatchById: (id: string) => VaccineBatch | undefined;
   getBatchesByVehicleId: (vehicleId: string, batchNumbers: string[]) => VaccineBatch[];
+  getBatchesByBatchNumber: (batchNumber: string) => VaccineBatch | undefined;
 }
 
 const defaultFilters: BatchFilters = {
@@ -58,5 +59,9 @@ export const useBatchStore = create<BatchState>((set, get) => ({
 
   getBatchesByVehicleId: (_vehicleId, batchNumbers) => {
     return get().batches.filter((b) => batchNumbers.includes(b.batchNumber));
+  },
+
+  getBatchesByBatchNumber: (batchNumber) => {
+    return get().batches.find((b) => b.batchNumber === batchNumber);
   },
 }));

@@ -17,6 +17,7 @@ export const mockVehicles: Vehicle[] = [
     lng: 116.42,
     lat: 39.92,
     batchNumbers: ['B20260615-A01', 'B20260615-A02'],
+    district: '朝阳区',
   },
   {
     id: 'v002',
@@ -34,6 +35,7 @@ export const mockVehicles: Vehicle[] = [
     lng: 116.32,
     lat: 39.98,
     batchNumbers: ['B20260610-B03'],
+    district: '海淀区',
   },
   {
     id: 'v003',
@@ -51,6 +53,7 @@ export const mockVehicles: Vehicle[] = [
     lng: 116.28,
     lat: 39.85,
     batchNumbers: ['B20260612-C01'],
+    district: '丰台区',
   },
   {
     id: 'v004',
@@ -68,6 +71,7 @@ export const mockVehicles: Vehicle[] = [
     lng: 116.48,
     lat: 39.90,
     batchNumbers: ['B20260608-D02'],
+    district: '通州区',
   },
   {
     id: 'v005',
@@ -85,6 +89,7 @@ export const mockVehicles: Vehicle[] = [
     lng: 116.35,
     lat: 39.73,
     batchNumbers: ['B20260614-E01'],
+    district: '大兴区',
   },
   {
     id: 'v006',
@@ -102,6 +107,7 @@ export const mockVehicles: Vehicle[] = [
     lng: 116.24,
     lat: 40.22,
     batchNumbers: ['B20260613-F01'],
+    district: '昌平区',
   },
 ];
 
@@ -168,4 +174,14 @@ export const vaccineTypes = [
   { value: 'HPV疫苗', label: 'HPV疫苗' },
   { value: '流感疫苗', label: '流感疫苗' },
   { value: '肺炎疫苗', label: '肺炎疫苗' },
+];
+
+export const districts = [
+  { value: '', label: '全部辖区' },
+  { value: '朝阳区', label: '朝阳区' },
+  { value: '海淀区', label: '海淀区' },
+  { value: '丰台区', label: '丰台区' },
+  { value: '通州区', label: '通州区' },
+  { value: '大兴区', label: '大兴区' },
+  { value: '昌平区', label: '昌平区' },
 ];

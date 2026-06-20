@@ -6,10 +6,13 @@ interface ExceptionState {
   exceptions: ExceptionEvent[];
   activeLevel: RiskLevel | 'all';
   selectedExceptionId: string | null;
+  locateVehicleId: string | null;
   setActiveLevel: (level: RiskLevel | 'all') => void;
   setSelectedException: (id: string | null) => void;
+  setLocateVehicleId: (id: string | null) => void;
   getExceptionsByLevel: (level: RiskLevel | 'all') => ExceptionEvent[];
   getExceptionsByStatus: (status: ExceptionStatus) => ExceptionEvent[];
+  getExceptionsByBatchNumbers: (batchNumbers: string[]) => ExceptionEvent[];
   handleException: (id: string, opinion: string, handler: string) => void;
   getStats: () => {
     total: number;
@@ -36,10 +39,13 @@ export const useExceptionStore = create<ExceptionState>((set, get) => ({
   exceptions: mockExceptions,
   activeLevel: 'all',
   selectedExceptionId: null,
+  locateVehicleId: null,
 
   setActiveLevel: (level) => set({ activeLevel: level }),
 
   setSelectedException: (id) => set({ selectedExceptionId: id }),
+
+  setLocateVehicleId: (id) => set({ locateVehicleId: id }),
 
   getExceptionsByLevel: (level) => {
     const { exceptions } = get();
@@ -49,6 +55,10 @@ export const useExceptionStore = create<ExceptionState>((set, get) => ({
 
   getExceptionsByStatus: (status) => {
     return get().exceptions.filter((e) => e.status === status);
+  },
+
+  getExceptionsByBatchNumbers: (batchNumbers) => {
+    return get().exceptions.filter((e) => e.vehicleId && batchNumbers.length > 0);
   },
 
   handleException: (id, opinion, handler) => {

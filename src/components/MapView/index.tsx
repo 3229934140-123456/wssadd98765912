@@ -1,12 +1,13 @@
 import React, { useMemo } from 'react';
 import { Truck, MapPin, Clock, Thermometer } from 'lucide-react';
 import type { Vehicle, TrackPoint } from '@/types';
-import { formatTemperature, formatTime, getVehicleStatusText } from '@/utils/format';
+import { formatTemperature, formatTime, getVehicleStatusText, getEventTypeText } from '@/utils/format';
 
 interface MapViewProps {
   vehicles: Vehicle[];
   selectedVehicleId: string | null;
   trackPoints: TrackPoint[];
+  highlightPointIds?: string[];
   onVehicleClick: (id: string) => void;
 }
 
@@ -31,7 +32,15 @@ const districts = [
 
 const cityCenter = { lng: 116.40, lat: 39.90, name: '市疾控中心' };
 
-const MapView: React.FC<MapViewProps> = ({ vehicles, selectedVehicleId, trackPoints, onVehicleClick }) => {
+const eventIconMap: Record<string, string> = {
+  loading: '📦',
+  unloading: '📤',
+  stop: '🛑',
+  'door-open': '🚪',
+  'door-close': '🔒',
+};
+
+const MapView: React.FC<MapViewProps> = ({ vehicles, selectedVehicleId, trackPoints, highlightPointIds = [], onVehicleClick }) => {
   const centerX = lngToX(cityCenter.lng);
   const centerY = latToY(cityCenter.lat);
 
@@ -42,6 +51,15 @@ const MapView: React.FC<MapViewProps> = ({ vehicles, selectedVehicleId, trackPoi
       .join(' ');
   }, [trackPoints]);
 
+  const highlightPath = useMemo(() => {
+    if (highlightPointIds.length < 2 || trackPoints.length === 0) return '';
+    const highlighted = trackPoints.filter((p) => highlightPointIds.includes(p.id));
+    if (highlighted.length < 2) return '';
+    return highlighted
+      .map((p, i) => `${i === 0 ? 'M' : 'L'} ${lngToX(p.lng)} ${latToY(p.lat)}`)
+      .join(' ');
+  }, [trackPoints, highlightPointIds]);
+
   const getVehicleColor = (v: Vehicle) => {
     if (v.currentTemp > 8 || v.currentTemp < 2) return 'danger';
     if (v.currentTemp > 6) return 'warning';
@@ -49,10 +67,12 @@ const MapView: React.FC<MapViewProps> = ({ vehicles, selectedVehicleId, trackPoi
   };
 
   const colorMap = {
-    success: { bg: 'bg-emerald-500', ring: 'ring-emerald-400/50', text: 'text-emerald-400' },
-    warning: { bg: 'bg-amber-500', ring: 'ring-amber-400/50', text: 'text-amber-400' },
-    danger: { bg: 'bg-red-500', ring: 'ring-red-400/50', text: 'text-red-400' },
+    success: { fill: '#10B981', text: 'text-emerald-400' },
+    warning: { fill: '#F59E0B', text: 'text-amber-400' },
+    danger: { fill: '#EF4444', text: 'text-red-400' },
   };
+
+  const eventPoints = trackPoints.filter((p) => p.eventType !== 'normal');
 
   return (
     <div className="w-full h-full relative bg-gradient-to-br from-dashboard-surface to-dashboard-card rounded-lg overflow-hidden border border-dashboard-border">
@@ -73,6 +93,13 @@ const MapView: React.FC<MapViewProps> = ({ vehicles, selectedVehicleId, trackPoi
             <stop offset="0%" stopColor="#2563EB" stopOpacity="0.3" />
             <stop offset="100%" stopColor="#2563EB" stopOpacity="1" />
           </linearGradient>
+          <filter id="glowFilter">
+            <feGaussianBlur stdDeviation="3" result="blur" />
+            <feMerge>
+              <feMergeNode in="blur" />
+              <feMergeNode in="SourceGraphic" />
+            </feMerge>
+          </filter>
         </defs>
 
         <rect width={MAP_WIDTH} height={MAP_HEIGHT} fill="url(#grid)" />
@@ -110,7 +137,7 @@ const MapView: React.FC<MapViewProps> = ({ vehicles, selectedVehicleId, trackPoi
               fill="none"
               stroke="#2563EB"
               strokeWidth="8"
-              strokeOpacity="0.2"
+              strokeOpacity="0.15"
               strokeLinecap="round"
               strokeLinejoin="round"
             />
@@ -134,19 +161,64 @@ const MapView: React.FC<MapViewProps> = ({ vehicles, selectedVehicleId, trackPoi
           </>
         )}
 
+        {highlightPath && (
+          <path
+            d={highlightPath}
+            fill="none"
+            stroke="#EF4444"
+            strokeWidth="6"
+            strokeOpacity="0.6"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            filter="url(#glowFilter)"
+          >
+            <animate
+              attributeName="stroke-opacity"
+              values="0.4;0.8;0.4"
+              dur="1.5s"
+              repeatCount="indefinite"
+            />
+          </path>
+        )}
+
         {trackPoints.map((p, i) => {
           const isEvent = p.eventType !== 'normal';
+          const isHighlighted = highlightPointIds.includes(p.id);
           return (
-            <circle
-              key={p.id}
-              cx={lngToX(p.lng)}
-              cy={latToY(p.lat)}
-              r={isEvent ? 6 : 3}
-              fill={isEvent ? '#F59E0B' : '#2563EB'}
-              stroke="#0A1628"
-              strokeWidth="2"
-              opacity={i === trackPoints.length - 1 ? 1 : 0.6}
-            />
+            <g key={p.id}>
+              <circle
+                cx={lngToX(p.lng)}
+                cy={latToY(p.lat)}
+                r={isEvent ? 5 : 3}
+                fill={isHighlighted ? '#EF4444' : isEvent ? '#F59E0B' : '#2563EB'}
+                stroke="#0A1628"
+                strokeWidth="2"
+                opacity={i === trackPoints.length - 1 ? 1 : 0.6}
+              />
+              {isEvent && (
+                <text
+                  x={lngToX(p.lng)}
+                  y={latToY(p.lat) - 12}
+                  textAnchor="middle"
+                  fontSize="12"
+                  fontFamily="sans-serif"
+                >
+                  {eventIconMap[p.eventType] || '📍'}
+                </text>
+              )}
+              {isEvent && (
+                <text
+                  x={lngToX(p.lng) + 10}
+                  y={latToY(p.lat) + 4}
+                  textAnchor="start"
+                  fill="#94A3B8"
+                  fontSize="8"
+                  fontFamily="sans-serif"
+                >
+                  {getEventTypeText(p.eventType)}
+                </text>
+              )}
+            </g>
           );
         })}
 
@@ -174,14 +246,14 @@ const MapView: React.FC<MapViewProps> = ({ vehicles, selectedVehicleId, trackPoi
               className="vehicle-marker"
             >
               {hasAlarm && (
-                <circle r="18" fill={color.bg.replace('bg-', '') === 'red-500' ? '#EF4444' : color.bg.replace('bg-', '') === 'amber-500' ? '#F59E0B' : '#10B981'} opacity="0.3">
+                <circle r="18" fill={color.fill} opacity="0.3">
                   <animate attributeName="r" from="14" to="24" dur="1.5s" repeatCount="indefinite" />
                   <animate attributeName="opacity" from="0.5" to="0" dur="1.5s" repeatCount="indefinite" />
                 </circle>
               )}
               <circle
                 r={isSelected ? 14 : 11}
-                fill={color.bg.replace('bg-', '') === 'red-500' ? '#EF4444' : color.bg.replace('bg-', '') === 'amber-500' ? '#F59E0B' : '#10B981'}
+                fill={color.fill}
                 stroke={isSelected ? '#fff' : '#0A1628'}
                 strokeWidth={isSelected ? 3 : 2}
               />
@@ -193,49 +265,33 @@ const MapView: React.FC<MapViewProps> = ({ vehicles, selectedVehicleId, trackPoi
         })}
       </svg>
 
-      {selectedVehicleId && (
-        <div className="absolute bottom-4 left-4 right-4 dashboard-card p-4 animate-slide-up">
-          {(() => {
-            const v = vehicles.find((x) => x.id === selectedVehicleId);
-            if (!v) return null;
-            const color = colorMap[getVehicleColor(v)];
-            return (
-              <div className="flex items-start justify-between gap-4">
-                <div className="flex-1">
-                  <div className="flex items-center gap-3 mb-2">
-                    <Truck className={`w-5 h-5 ${color.text}`} />
-                    <span className="text-lg font-semibold text-white">{v.plateNumber}</span>
-                    <span className={`px-2 py-0.5 rounded text-xs bg-dashboard-hover ${color.text}`}>
-                      {getVehicleStatusText(v.status)}
-                    </span>
-                  </div>
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
-                    <div className="flex items-center gap-2">
-                      <Thermometer className={`w-4 h-4 ${color.text}`} />
-                      <span className="text-slate-400">温度:</span>
-                      <span className={`data-number font-medium ${color.text}`}>{formatTemperature(v.currentTemp)}</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <MapPin className="w-4 h-4 text-slate-500" />
-                      <span className="text-slate-400">目的地:</span>
-                      <span className="text-slate-200">{v.destination}</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Clock className="w-4 h-4 text-slate-500" />
-                      <span className="text-slate-400">预计到达:</span>
-                      <span className="text-slate-200 data-number">{formatTime(v.eta)}</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-slate-400">承运:</span>
-                      <span className="text-slate-200">{v.carrier}</span>
-                    </div>
-                  </div>
-                </div>
+      {selectedVehicleId && (() => {
+        const v = vehicles.find((x) => x.id === selectedVehicleId);
+        if (!v) return null;
+        const color = colorMap[getVehicleColor(v)];
+        return (
+          <div className="absolute bottom-4 left-4 dashboard-card p-3 animate-slide-up">
+            <div className="flex items-center gap-4">
+              <div className="flex items-center gap-2">
+                <Truck className={`w-4 h-4 ${color.text}`} />
+                <span className="text-sm font-semibold text-white">{v.plateNumber}</span>
               </div>
-            );
-          })()}
-        </div>
-      )}
+              <div className="flex items-center gap-2 text-xs">
+                <Thermometer className={`w-3.5 h-3.5 ${color.text}`} />
+                <span className={`data-number ${color.text}`}>{formatTemperature(v.currentTemp)}</span>
+              </div>
+              <div className="flex items-center gap-2 text-xs">
+                <MapPin className="w-3.5 h-3.5 text-slate-500" />
+                <span className="text-slate-300">{v.destination}</span>
+              </div>
+              <div className="flex items-center gap-2 text-xs">
+                <Clock className="w-3.5 h-3.5 text-slate-500" />
+                <span className="text-slate-300 data-number">ETA {formatTime(v.eta)}</span>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       <div className="absolute top-4 right-4 flex flex-col gap-2">
         <div className="dashboard-card px-3 py-2 text-xs flex items-center gap-4">

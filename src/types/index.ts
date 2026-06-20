@@ -4,6 +4,8 @@ export type ExceptionType = 'over-temperature' | 'long-stop' | 'route-deviation'
 export type ExceptionStatus = 'pending' | 'handling' | 'resolved';
 export type EventType = 'normal' | 'loading' | 'unloading' | 'stop' | 'door-open' | 'door-close';
 export type NodeType = 'warehouse' | 'vehicle' | 'station';
+export type JurisdictionLevel = 'city' | 'county';
+export type CountyDistrict = '朝阳区' | '海淀区' | '丰台区' | '通州区' | '大兴区' | '昌平区';
 
 export interface Vehicle {
   id: string;
@@ -21,6 +23,7 @@ export interface Vehicle {
   lng: number;
   lat: number;
   batchNumbers: string[];
+  district: CountyDistrict;
 }
 
 export interface TrackPoint {

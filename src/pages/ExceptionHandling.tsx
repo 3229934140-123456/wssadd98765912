@@ -1,8 +1,10 @@
 import React, { useState } from 'react';
-import { AlertTriangle, Thermometer, MapPin, Clock, User, Send, CheckCircle, AlertCircle, Navigation, DoorOpen, PauseCircle, X, MessageSquare } from 'lucide-react';
+import { AlertTriangle, Thermometer, MapPin, Clock, User, Send, CheckCircle, AlertCircle, Navigation, DoorOpen, PauseCircle, X, MessageSquare, Crosshair } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import StatsCard from '@/components/StatsCard';
 import RiskBadge from '@/components/RiskBadge';
 import { useExceptionStore } from '@/store/exceptionStore';
+import { useVehicleStore } from '@/store/vehicleStore';
 import type { ExceptionEvent, RiskLevel } from '@/types';
 import { formatTemperature, formatRelativeTime, formatDateTime, getExceptionTypeText, getExceptionStatusText } from '@/utils/format';
 
@@ -21,7 +23,9 @@ const handleOptions = [
 ];
 
 const ExceptionHandling: React.FC = () => {
-  const { activeLevel, setActiveLevel, getExceptionsByLevel, handleException, getStats, selectedExceptionId, setSelectedException } = useExceptionStore();
+  const navigate = useNavigate();
+  const { activeLevel, setActiveLevel, getExceptionsByLevel, handleException, getStats, selectedExceptionId, setSelectedException, setLocateVehicleId } = useExceptionStore();
+  const { setHighlightTrackSegment, setSelectedVehicle } = useVehicleStore();
   const [selectedOpinion, setSelectedOpinion] = useState('');
   const [customOpinion, setCustomOpinion] = useState('');
   const [handlerName, setHandlerName] = useState('市级管理员');
@@ -45,6 +49,18 @@ const ExceptionHandling: React.FC = () => {
     setSelectedOpinion('');
     setCustomOpinion('');
     setSelectedException(null);
+  };
+
+  const handleLocateOnMap = (exception: ExceptionEvent) => {
+    if (!exception.vehicleId) return;
+    setLocateVehicleId(exception.vehicleId);
+    setSelectedVehicle(exception.vehicleId);
+    const tps = useVehicleStore.getState().trackPoints[exception.vehicleId] || [];
+    const eventPointIds = tps.filter((tp) => tp.eventType !== 'normal').map((tp) => tp.id);
+    if (eventPointIds.length > 0) {
+      setHighlightTrackSegment({ vehicleId: exception.vehicleId, pointIds: eventPointIds });
+    }
+    navigate('/map-overview');
   };
 
   return (
@@ -111,6 +127,7 @@ const ExceptionHandling: React.FC = () => {
                 index={idx}
                 isSelected={selectedExceptionId === ex.id}
                 onClick={() => setSelectedException(selectedExceptionId === ex.id ? null : ex.id)}
+                onLocateOnMap={() => handleLocateOnMap(ex)}
               />
             ))}
             {exceptions.length === 0 && (
@@ -175,6 +192,15 @@ const ExceptionHandling: React.FC = () => {
                     <AlertCircle className="w-3.5 h-3.5" />
                     <span className="text-slate-200">{getExceptionStatusText(selectedException.status)}</span>
                   </div>
+                </div>
+                <div className="mt-3 pt-3 border-t border-dashboard-border">
+                  <button
+                    className="btn-secondary text-xs"
+                    onClick={() => handleLocateOnMap(selectedException)}
+                  >
+                    <Crosshair className="w-3.5 h-3.5" />
+                    <span>定位到地图</span>
+                  </button>
                 </div>
               </div>
 
@@ -269,7 +295,8 @@ const ExceptionCard: React.FC<{
   index: number;
   isSelected: boolean;
   onClick: () => void;
-}> = ({ exception, index, isSelected, onClick }) => {
+  onLocateOnMap: () => void;
+}> = ({ exception, index, isSelected, onClick, onLocateOnMap }) => {
   const TypeIcon = typeIcons[exception.type] || AlertTriangle;
   const levelBgColors = {
     high: 'bg-red-500/10 border-red-500/30 hover:border-red-500/50',
@@ -289,9 +316,8 @@ const ExceptionCard: React.FC<{
         isSelected ? 'ring-2 ring-primary-500 scale-[1.01]' : ''
       }`}
       style={{ animationDelay: `${index * 50}ms` }}
-      onClick={onClick}
     >
-      <div className="flex items-start justify-between mb-3">
+      <div className="flex items-start justify-between mb-3" onClick={onClick}>
         <div className="flex items-center gap-3">
           <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
             exception.level === 'high' ? 'bg-red-500/20 text-red-400' :
@@ -313,7 +339,7 @@ const ExceptionCard: React.FC<{
         </span>
       </div>
 
-      <p className="text-sm text-slate-300 mb-3 line-clamp-2">{exception.description}</p>
+      <p className="text-sm text-slate-300 mb-3 line-clamp-2" onClick={onClick}>{exception.description}</p>
 
       <div className="flex items-center justify-between text-xs">
         <div className="flex items-center gap-4 text-slate-500">
@@ -326,13 +352,25 @@ const ExceptionCard: React.FC<{
             {formatRelativeTime(exception.timestamp)}
           </span>
         </div>
-        {exception.temperature !== undefined && (
-          <span className={`data-number font-medium ${
-            exception.temperature > 8 ? 'text-red-400' : 'text-emerald-400'
-          }`}>
-            {formatTemperature(exception.temperature)}
-          </span>
-        )}
+        <div className="flex items-center gap-2">
+          {exception.temperature !== undefined && (
+            <span className={`data-number font-medium ${
+              exception.temperature > 8 ? 'text-red-400' : 'text-emerald-400'
+            }`}>
+              {formatTemperature(exception.temperature)}
+            </span>
+          )}
+          <button
+            className="p-1.5 rounded hover:bg-primary-500/20 text-slate-500 hover:text-primary-400 transition-colors"
+            onClick={(e) => {
+              e.stopPropagation();
+              onLocateOnMap();
+            }}
+            title="定位到地图"
+          >
+            <Crosshair className="w-3.5 h-3.5" />
+          </button>
+        </div>
       </div>
     </div>
   );

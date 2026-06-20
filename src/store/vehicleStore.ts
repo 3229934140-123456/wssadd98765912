@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Vehicle, TrackPoint, VehicleFilters } from '@/types';
+import type { Vehicle, TrackPoint, VehicleFilters, JurisdictionLevel, CountyDistrict } from '@/types';
 import { mockVehicles, mockTrackPoints } from '@/mock/vehicles';
 
 interface VehicleState {
@@ -7,9 +7,15 @@ interface VehicleState {
   trackPoints: Record<string, TrackPoint[]>;
   selectedVehicleId: string | null;
   filters: VehicleFilters;
+  jurisdiction: JurisdictionLevel;
+  countyDistrict: CountyDistrict | '';
+  highlightTrackSegment: { vehicleId: string; pointIds: string[] } | null;
   setSelectedVehicle: (id: string | null) => void;
   setFilters: (filters: Partial<VehicleFilters>) => void;
   resetFilters: () => void;
+  setJurisdiction: (level: JurisdictionLevel) => void;
+  setCountyDistrict: (district: CountyDistrict | '') => void;
+  setHighlightTrackSegment: (segment: { vehicleId: string; pointIds: string[] } | null) => void;
   getFilteredVehicles: () => Vehicle[];
   getTrackPointsByVehicleId: (id: string) => TrackPoint[];
   getVehicleStats: () => {
@@ -33,6 +39,9 @@ export const useVehicleStore = create<VehicleState>((set, get) => ({
   trackPoints: mockTrackPoints,
   selectedVehicleId: null,
   filters: defaultFilters,
+  jurisdiction: 'city',
+  countyDistrict: '',
+  highlightTrackSegment: null,
 
   setSelectedVehicle: (id) => set({ selectedVehicleId: id }),
 
@@ -41,9 +50,19 @@ export const useVehicleStore = create<VehicleState>((set, get) => ({
 
   resetFilters: () => set({ filters: defaultFilters }),
 
+  setJurisdiction: (level) => set({
+    jurisdiction: level,
+    countyDistrict: level === 'city' ? '' : get().countyDistrict || '',
+  }),
+
+  setCountyDistrict: (district) => set({ countyDistrict: district }),
+
+  setHighlightTrackSegment: (segment) => set({ highlightTrackSegment: segment }),
+
   getFilteredVehicles: () => {
-    const { vehicles, filters } = get();
+    const { vehicles, filters, jurisdiction, countyDistrict } = get();
     return vehicles.filter((v) => {
+      if (jurisdiction === 'county' && countyDistrict && v.district !== countyDistrict) return false;
       if (filters.route && v.route !== filters.route) return false;
       if (filters.carrier && v.carrier !== filters.carrier) return false;
       if (filters.vaccineType && v.vaccineType !== filters.vaccineType) return false;
@@ -57,12 +76,12 @@ export const useVehicleStore = create<VehicleState>((set, get) => ({
   },
 
   getVehicleStats: () => {
-    const { vehicles } = get();
-    const total = vehicles.length;
-    const inTransit = vehicles.filter((v) => v.status === 'in-transit').length;
-    const normal = vehicles.filter((v) => v.currentTemp >= 2 && v.currentTemp <= 8).length;
+    const filtered = get().getFilteredVehicles();
+    const total = filtered.length;
+    const inTransit = filtered.filter((v) => v.status === 'in-transit').length;
+    const normal = filtered.filter((v) => v.currentTemp >= 2 && v.currentTemp <= 8).length;
     const abnormal = total - normal;
-    const todayDeliveries = vehicles.length;
+    const todayDeliveries = filtered.length;
     return { total, inTransit, normal, abnormal, todayDeliveries };
   },
 }));
